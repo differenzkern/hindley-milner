@@ -6,6 +6,7 @@ use crate::check::typecheck;
 use crate::parser::parse;
 
 mod check;
+mod eval;
 mod parser;
 
 fn main() -> Result<()> {
@@ -16,13 +17,15 @@ fn main() -> Result<()> {
         "false",
         "λx.λy.x",
         "(λx.λy.x) false",
+        "(λx.x)(λy.y)true",
     ];
 
     for input in inputs {
         let expr = parse(input)?;
         let ty = typecheck(&expr)?;
+        let eval = eval::eval(expr.clone());
 
-        println!("{expr}: {ty}");
+        println!("> {expr}\n{eval}: {ty}");
     }
 
     Ok(())
