@@ -10,7 +10,6 @@ trait Types {
     fn apply(&mut self, s: &Subst);
 }
 
-
 impl Types for Type {
     fn ftv(&self) -> Set<String> {
         match self {

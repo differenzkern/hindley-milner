@@ -3,8 +3,30 @@ use std::fmt::Display;
 use anyhow::Result;
 
 use crate::check::typecheck;
+use crate::parser::parse;
 
 mod check;
+mod parser;
+
+fn main() -> Result<()> {
+    let inputs = [
+        "λx.let y = x in y",
+        "(λx.x)(λy.y)",
+        "3",
+        "false",
+        "λx.λy.x",
+        "(λx.λy.x) false",
+    ];
+
+    for input in inputs {
+        let expr = parse(input)?;
+        let ty = typecheck(&expr)?;
+
+        println!("{expr}: {ty}");
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -27,63 +49,6 @@ pub enum Type {
     Int,
     Bool,
     Fun(Box<Type>, Box<Type>),
-}
-
-
-fn main() -> Result<()> {
-    let e0 = Expr::Let(
-        "id".to_owned(),
-        Box::new(Expr::Abs(
-            "x".to_owned(),
-            Box::new(Expr::Var("x".to_owned())),
-        )),
-        Box::new(Expr::Var("id".to_owned())),
-    );
-
-    let e1 = Expr::Let(
-        "id".to_owned(),
-        Box::new(Expr::Abs(
-            "x".to_owned(),
-            Box::new(Expr::Var("x".to_owned())),
-        )),
-        Box::new(Expr::App(
-            Box::new(Expr::Var("id".to_owned())),
-            Box::new(Expr::Var("id".to_owned())),
-        )),
-    );
-
-    let e2 = Expr::Let(
-        "id".to_owned(),
-        Box::new(Expr::Abs(
-            "x".to_owned(),
-            Box::new(Expr::Let(
-                "y".to_owned(),
-                Box::new(Expr::Var("x".to_owned())),
-                Box::new(Expr::Var("y".to_owned())),
-            )),
-        )),
-        Box::new(Expr::App(
-            Box::new(Expr::Var("id".to_owned())),
-            Box::new(Expr::Var("id".to_owned())),
-        )),
-    );
-
-    let e3 = Expr::Abs(
-        "x".to_owned(),
-        Box::new(Expr::Let(
-            "y".to_owned(),
-            Box::new(Expr::Var("x".to_owned())),
-            Box::new(Expr::Var("y".to_owned())),
-        )),
-    );
-
-    let expr = vec![e0, e1, e2, e3];
-
-    for expr in expr {
-        println!("{expr}: {}\n", typecheck(&expr)?);
-    }
-
-    Ok(())
 }
 
 impl Display for Type {
