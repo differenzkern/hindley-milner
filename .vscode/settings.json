@@ -1,0 +1,10 @@
+{
+    "terminal.integrated.profiles.linux":  {
+        "nix-shell": {
+            "path": "nix",
+            "args": [ "develop" ]
+        },
+    },
+    "terminal.integrated.defaultProfile.linux": "nix-develop",
+    "rust-analyzer.checkOnSave.command": "clippy"
+}
