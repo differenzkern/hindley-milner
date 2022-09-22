@@ -114,7 +114,7 @@ impl TypeEnv {
     pub fn generalize(&self, ty: &Type) -> Scheme {
         let mut vars = ty.ftv();
 
-        for name in self.0.keys() {
+        for name in &self.ftv() {
             vars.remove(name);
         }
 
@@ -149,8 +149,6 @@ impl TIState {
     }
 
     pub fn mgu(&mut self, t1: &Type, t2: &Type) -> Result<Subst> {
-        //dbg!(&self, &t1, &t2);
-
         match (t1, t2) {
             (Type::Fun(l, r), Type::Fun(l_, r_)) => {
                 let s1 = self.mgu(l, l_)?;
@@ -241,7 +239,11 @@ impl TIState {
             Expr::Let(x, e1, e2) => {
                 let (s1, t1) = self.ti(env, *e1)?;
 
-                let t_ = env.generalize(&t1);
+                let t_ = {
+                    let mut env = env.clone();
+                    env.apply(&s1);
+                    env.generalize(&t1)
+                };
 
                 let mut env = env.clone();
                 env.remove(&x);
@@ -249,7 +251,6 @@ impl TIState {
                 env.apply(&s1);
 
                 let (s2, t2) = self.ti(&env, *e2)?;
-
                 (s1.compose(&s2), t2)
             }
         };
