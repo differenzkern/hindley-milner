@@ -124,11 +124,7 @@ impl TypeEnv {
 
 impl Types for TypeEnv {
     fn ftv(&self) -> Set<String> {
-        self.0
-            .values()
-            .cloned()
-            .collect::<Vec<Scheme>>()
-            .ftv()
+        self.0.values().cloned().collect::<Vec<Scheme>>().ftv()
     }
 
     fn apply(&mut self, s: &Subst) {
@@ -280,7 +276,7 @@ impl Subst {
             let mut y = y.clone();
             y.apply(self);
 
-            assert!(subst.0.insert(x.to_string(), y).is_none());
+            subst.0.insert(x.to_string(), y);
         }
 
         subst
@@ -343,7 +339,7 @@ fn main() -> Result<()> {
         let (subst, mut ty) = state.ti(&env, expr.clone())?;
         ty.apply(&subst);
 
-        println!("{expr}: {ty}\nS = {subst:?}\nΓ = {env:?}\n");
+        println!("{expr}: {ty}\nS = {:?}\nΓ = {:?}\n", subst.0, env.0);
     }
 
     Ok(())
