@@ -40,8 +40,8 @@ impl Types for Type {
 struct Scheme(Vec<String>, Type);
 
 impl Types for Scheme {
-    fn apply(&mut self, s: &Subst) {
-        let mut s = s.clone();
+    fn apply(&mut self, sub: &Subst) {
+        let mut s = sub.clone();
 
         for name in &self.0 {
             s.0.remove(name);
@@ -122,16 +122,16 @@ impl TIState {
         Type::Var(format!("{prefix}{}", self.0))
     }
 
-    pub fn mgu(&mut self, t1: &Type, t2: &Type) -> Result<Subst> {
-        match (t1, t2) {
+    pub fn unify(&mut self, ty1: &Type, ty2: &Type) -> Result<Subst> {
+        match (ty1, ty2) {
             (Type::Fun(l, r), Type::Fun(l_, r_)) => {
-                let s1 = self.mgu(l, l_)?;
+                let s1 = self.unify(l, l_)?;
 
                 let (mut r, mut r_) = (r.clone(), r_.clone());
                 r.apply(&s1);
                 r_.apply(&s1);
 
-                let s2 = self.mgu(&r, &r_)?;
+                let s2 = self.unify(&r, &r_)?;
                 Ok(s1.compose(&s2))
             }
             (Type::Var(u), t) | (t, Type::Var(u)) => self.var_bind(u, t),
@@ -141,18 +141,18 @@ impl TIState {
         }
     }
 
-    pub fn var_bind(&self, s: &str, t: &Type) -> Result<Subst> {
-        if let Type::Var(var) = t {
+    pub fn var_bind(&self, s: &str, ty: &Type) -> Result<Subst> {
+        if let Type::Var(var) = ty {
             if s == var {
                 return Ok(Subst::null());
             }
         }
 
-        if t.ftv().contains(s) {
-            anyhow::bail!("occur check fails: {s} vs. {t}");
+        if ty.ftv().contains(s) {
+            anyhow::bail!("occur check fails: {s} vs. {ty}");
         }
 
-        Ok(Subst::singleton(s.to_owned(), t.clone()))
+        Ok(Subst::singleton(s.to_owned(), ty.clone()))
     }
 
     pub fn instantiate(&mut self, scheme: &Scheme) -> Type {
@@ -205,7 +205,7 @@ impl TIState {
 
                 t1.apply(&s2);
 
-                let s3 = self.mgu(&t1, &Type::Fun(Box::new(t2), Box::new(tv.clone())))?;
+                let s3 = self.unify(&t1, &Type::Fun(Box::new(t2), Box::new(tv.clone())))?;
                 tv.apply(&s3);
 
                 (s3.compose(&s2.compose(&s1)), tv)
