@@ -1,5 +1,4 @@
-use std::collections::HashMap as Map;
-use std::collections::HashSet as Set;
+use std::collections::{HashMap as Map, HashSet as Set};
 
 use anyhow::Result;
 
@@ -227,6 +226,7 @@ impl TIState {
                 let (s2, t2) = self.ti(&env, *e2)?;
                 (s1.compose(&s2), t2)
             }
+            Expr::Match(_, _) => todo!(),
         };
         Ok((subst, t))
     }
