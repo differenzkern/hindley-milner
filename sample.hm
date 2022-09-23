@@ -1,0 +1,10 @@
+type Nat = Zero | S Nat
+type Bool = True | False
+
+fun neg b = match b | True → False | False → True
+
+fun plus n m = match n | Zero → m | S n → plus n (S m)
+
+fun plus2 = λn.λm.match n | Zero → m | S n → plus n (S m)
+
+fun is_odd n = match n | Zero → false | S n → neg (is_odd n)

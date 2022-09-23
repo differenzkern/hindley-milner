@@ -49,5 +49,6 @@ pub fn eval(expr: Expr) -> Expr {
             substitute(&n, &val, &mut in_);
             *in_
         }
+        Expr::Match(_, _) => todo!(),
     }
 }
