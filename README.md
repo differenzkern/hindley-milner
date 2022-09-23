@@ -1,4 +1,4 @@
-# hindley milner type system
+# hindley milner type inference
 
 the two papers that I used for understanding and implementing hindley-milner type inference:
 
