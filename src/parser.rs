@@ -1,7 +1,34 @@
-use anyhow::Result;
-use chumsky::prelude::*;
+use std::{fmt::Display, ops::Deref, rc::Rc};
 
-use crate::{Clause, Constructor, Expr, Function, Inductive, Literal, Toplevel};
+use ariadne::{Color, Fmt, Label, Report, ReportKind, Source};
+use chumsky::{prelude::*, Stream};
+
+use crate::{Algebraic, Clause, Constructor, Expr, Function, Literal, Toplevel};
+
+pub type Span = std::ops::Range<usize>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spanned<T>(pub T, pub Span);
+
+impl<T> Spanned<T> {
+    pub fn span(&self) -> Span {
+        self.1.clone()
+    }
+}
+
+impl<T> Deref for Spanned<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: Display> Display for Spanned<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 
@@ -18,7 +45,24 @@ pub enum Token {
     In,
 }
 
-fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Token::Match => "match".fmt(f),
+            Token::Function => "fun".fmt(f),
+            Token::Inductive => "type".fmt(f),
+            Token::Ctrl(c) => c.fmt(f),
+            Token::Ident(ident) => ident.fmt(f),
+            Token::True => "true".fmt(f),
+            Token::False => "false".fmt(f),
+            Token::Num(num) => num.fmt(f),
+            Token::Let => "let".fmt(f),
+            Token::In => "in".fmt(f),
+        }
+    }
+}
+
+fn spanned_lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
     let num = text::int(10).map(Token::Num);
 
     let ctrl = one_of("|()=λ.→").map(Token::Ctrl);
@@ -31,12 +75,21 @@ fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         _ => Token::Ident(ident),
     });
 
-    let token = num.or(ctrl).or(ident);
+    let token = num
+        .or(ctrl)
+        .or(ident)
+        .recover_with(skip_then_retry_until([]));
 
-    token.padded().repeated()
+    let comment = just("/*").then(take_until(just("*/"))).padded();
+
+    token
+        .map_with_span(|token, span| (token, span))
+        .padded_by(comment.repeated())
+        .padded()
+        .repeated()
 }
 
-fn parser() -> impl Parser<Token, Vec<Toplevel>, Error = Simple<Token>> {
+fn spanned_parser() -> impl Parser<Token, Vec<Toplevel>, Error = Simple<Token>> {
     let expr = recursive(|expr| {
         let brackets = expr
             .clone()
@@ -50,46 +103,55 @@ fn parser() -> impl Parser<Token, Vec<Toplevel>, Error = Simple<Token>> {
 
         let ident = select! { Token::Ident(ident) => ident };
 
+        let spanned_ident = ident.map_with_span(Spanned);
+
         let r#let = just(Token::Let)
             .ignore_then(ident)
             .then_ignore(just(Token::Ctrl('=')))
             .then(expr.clone())
             .then_ignore(just(Token::In))
             .then(expr.clone())
-            .map(|((name, val), expr)| Expr::Let(name, Box::new(val), Box::new(expr)));
+            .map(|((name, val), expr)| Expr::Let(name, Rc::new(val), Rc::new(expr)));
 
         let lambda = just(Token::Ctrl('λ'))
             .ignore_then(ident)
             .then_ignore(just(Token::Ctrl('.')))
             .then(expr.clone())
-            .map(|(a, b)| Expr::Abs(a, Box::new(b)));
+            .map(|(a, b)| Expr::Abs(a, Rc::new(b)));
 
         let clause = just(Token::Ctrl('|'))
-            .ignore_then(ident)
-            .then(ident.repeated())
+            .ignore_then(ident.map_with_span(Spanned))
+            .then(ident.map_with_span(Spanned).repeated())
             .then_ignore(just(Token::Ctrl('→')))
             .then(expr.clone())
-            .map(|((constructor, variables), expr)| Clause {
-                constructor,
-                variables,
-                expr,
+            .map_with_span(|((constructor, variables), expr), span| {
+                Spanned(
+                    Clause {
+                        constructor,
+                        variables,
+                        expr: Rc::new(expr),
+                    },
+                    span,
+                )
             });
 
         let r#match = just(Token::Match)
-            .ignore_then(ident)
+            .ignore_then(spanned_ident)
             .then(clause.repeated())
             .map(|(variable, clauses)| Expr::Match(variable, clauses));
 
-        let atom = brackets
-            .or(val)
+        let atom = brackets.or(val
             .or(r#let)
             .or(lambda)
             .or(r#match)
-            .or(ident.map(Expr::Var));
+            .or(ident.map(Expr::Var))
+            .map_with_span(Spanned));
 
         atom.clone().then(atom.repeated()).map(|(atom, rem)| {
             rem.into_iter().fold(atom, |left, right| {
-                Expr::App(Box::new(left), Box::new(right))
+                let span = left.1.start..right.1.end;
+
+                Spanned(Expr::App(Rc::new(left), Rc::new(right)), span)
             })
         })
     });
@@ -117,7 +179,7 @@ fn parser() -> impl Parser<Token, Vec<Toplevel>, Error = Simple<Token>> {
         .ignore_then(ident)
         .then_ignore(just(Token::Ctrl('=')))
         .then(constructor.separated_by(just(Token::Ctrl('|'))))
-        .map(|(name, constructors)| Toplevel::Ind(Inductive { name, constructors }));
+        .map(|(name, constructors)| Toplevel::Algebraic(Algebraic { name, constructors }));
 
     function
         .or(inductive)
@@ -125,9 +187,88 @@ fn parser() -> impl Parser<Token, Vec<Toplevel>, Error = Simple<Token>> {
         .repeated()
 }
 
-pub fn parse(s: &str) -> Result<Vec<Toplevel>> {
-    let tokens = lexer().parse(s).map_err(|err| anyhow::anyhow!("{err:?}"))?;
-    parser()
-        .parse(tokens)
-        .map_err(|err| anyhow::anyhow!("{err:?}"))
+pub fn parse(src: &str) -> Vec<Toplevel> {
+    let len = src.chars().count();
+
+    let (tokens, tokenize_errs) = spanned_lexer().parse_recovery(src);
+
+    let (toplevel, parse_errs) = spanned_parser().parse_recovery(Stream::from_iter(
+        len..len + 1,
+        tokens.unwrap_or_default().into_iter(),
+    ));
+
+    tokenize_errs
+        .into_iter()
+        .map(|e| e.map(|c| c.to_string()))
+        .chain(parse_errs.into_iter().map(|e| e.map(|tok| tok.to_string())))
+        .for_each(|e| {
+            dbg!(&e);
+
+            let report = Report::build(ReportKind::Error, (), e.span().start);
+
+            let report = match e.reason() {
+                chumsky::error::SimpleReason::Unclosed { span, delimiter } => report
+                    .with_message(format!(
+                        "Unclosed delimiter {}",
+                        delimiter.fg(Color::Yellow)
+                    ))
+                    .with_label(
+                        Label::new(span.clone())
+                            .with_message(format!(
+                                "Unclosed delimiter {}",
+                                delimiter.fg(Color::Yellow)
+                            ))
+                            .with_color(Color::Yellow),
+                    )
+                    .with_label(
+                        Label::new(e.span())
+                            .with_message(format!(
+                                "Must be closed before this {}",
+                                e.found()
+                                    .unwrap_or(&"end of file".to_string())
+                                    .fg(Color::Red)
+                            ))
+                            .with_color(Color::Red),
+                    ),
+                chumsky::error::SimpleReason::Unexpected => report
+                    .with_message(format!(
+                        "{}, expected {}",
+                        if e.found().is_some() {
+                            "Unexpected token in input"
+                        } else {
+                            "Unexpected end of input"
+                        },
+                        if e.expected().len() == 0 {
+                            "something else".to_string()
+                        } else {
+                            e.expected()
+                                .map(|expected| match expected {
+                                    Some(expected) => expected.to_string(),
+                                    None => "end of input".to_string(),
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        }
+                    ))
+                    .with_label(
+                        Label::new(e.span())
+                            .with_message(format!(
+                                "Unexpected token {}",
+                                e.found()
+                                    .unwrap_or(&"end of file".to_string())
+                                    .fg(Color::Red)
+                            ))
+                            .with_color(Color::Red),
+                    ),
+                chumsky::error::SimpleReason::Custom(msg) => report.with_message(msg).with_label(
+                    Label::new(e.span())
+                        .with_message(format!("{}", msg.fg(Color::Red)))
+                        .with_color(Color::Red),
+                ),
+            };
+
+            report.finish().print(Source::from(&src)).unwrap();
+        });
+
+    toplevel.unwrap_or_default()
 }
