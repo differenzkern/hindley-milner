@@ -1,38 +1,120 @@
-use std::fmt::Display;
+use std::collections::HashMap as Map;
+use std::{fmt::Display, rc::Rc};
 
-use anyhow::{Context, Result};
+use ariadne::{Report, ReportKind, Source};
+use check::{Namespace, TIState, TypeEnv};
+use parser::Spanned;
 
+use crate::check::{type_check, Scheme};
 use crate::parser::parse;
 
 mod check;
-mod eval;
 mod parser;
 
-fn main() -> Result<()> {
+fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() != 2 {
-        anyhow::bail!("expected input file argument");
+        println!("expected input file as argument");
+
+        std::process::exit(-1);
     }
 
-    let input = std::fs::read_to_string(&args[1]).context("failed to read file")?;
+    let input = std::fs::read_to_string(&args.get(1).unwrap()).unwrap();
 
-    let toplevel = parse(&input).context("failed to parse file")?;
+    let toplevel = parse(&input);
 
-    dbg!(toplevel);
+    let mut namespace = Namespace(Map::new());
+
+    let mut state = TIState::default();
+    let mut env = TypeEnv(Map::new());
+
+    for toplevel in toplevel {
+        let mut report = Report::build(ReportKind::Error, (), 0);
+
+        match toplevel {
+            Toplevel::Algebraic(def) => {
+                let def = Rc::new(def);
+
+                for (idx, con) in def.constructors.iter().enumerate() {
+                    assert!(namespace
+                        .insert(
+                            con.name.clone(),
+                            Name::Constructor {
+                                idx,
+                                r#type: def.clone()
+                            }
+                        )
+                        .is_none());
+
+                    let mut r#type = Type::Algebraic(def.name.clone());
+
+                    for arg in con.arguments.iter().rev() {
+                        r#type =
+                            Type::Fun(Box::new(Type::Algebraic(arg.clone())), Box::new(r#type));
+                    }
+
+                    env.0.insert(con.name.clone(), Scheme(vec![], r#type));
+                }
+
+                assert!(namespace
+                    .insert(def.name.clone(), Name::Type(def))
+                    .is_none());
+            }
+            Toplevel::Fun(fun) => {
+                let Function {
+                    name,
+                    mut body,
+                    arguments,
+                } = fun;
+
+                for args in arguments.into_iter().rev() {
+                    let span = body.1.clone();
+                    body = Spanned(Expr::Abs(args, Rc::new(body)), span);
+                }
+
+                let body = Rc::new(body);
+
+                if type_check(&namespace, &body, &mut env, &mut state, &mut report).is_err() {
+                    report.finish().print(Source::from(&input))?;
+                }
+
+                assert!(namespace.insert(name, Name::Function(body)).is_none());
+            }
+            Toplevel::Expr(expr) => {
+                let expr = Rc::new(expr);
+                match type_check(&namespace, &expr, &mut env, &mut state, &mut report) {
+                    Ok(ty) => {
+                        println!("{expr}: {ty}");
+                    }
+                    Err(_) => {
+                        report.finish().print(Source::from(&input))?;
+                    }
+                }
+            }
+        }
+    }
 
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Toplevel {
-    Ind(Inductive),
-    Fun(Function),
-    Expr(Expr),
+pub struct Names(Map<String, Name>);
+
+pub enum Name {
+    Constructor { idx: usize, r#type: Rc<Algebraic> },
+    Function(Rc<Spanned<Expr>>),
+    Type(Rc<Algebraic>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Inductive {
+pub enum Toplevel {
+    Algebraic(Algebraic),
+    Fun(Function),
+    Expr(Spanned<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Algebraic {
     name: String,
     constructors: Vec<Constructor>,
 }
@@ -47,25 +129,25 @@ struct Constructor {
 pub struct Function {
     name: String,
     arguments: Vec<String>,
-    body: Expr,
+    body: Spanned<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Var(String),
-    App(Box<Expr>, Box<Expr>),
-    Abs(String, Box<Expr>),
+    App(Rc<Spanned<Expr>>, Rc<Spanned<Expr>>),
+    Abs(String, Rc<Spanned<Expr>>),
     Lit(Literal),
-    Let(String, Box<Expr>, Box<Expr>),
-    Match(String, Vec<Clause>),
+    Let(String, Rc<Spanned<Expr>>, Rc<Spanned<Expr>>),
+    Match(Spanned<String>, Vec<Spanned<Clause>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 
 pub struct Clause {
-    constructor: String,
-    variables: Vec<String>,
-    expr: Expr,
+    constructor: Spanned<String>,
+    variables: Vec<Spanned<String>>,
+    expr: Rc<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +158,7 @@ pub enum Literal {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
+    Algebraic(String),
     Var(String),
     Int,
     Bool,
@@ -93,7 +176,8 @@ impl Display for Type {
         }
 
         match self {
-            Type::Var(n) => n.fmt(f),
+            Type::Algebraic(n) => n.fmt(f),
+            Type::Var(n) => write!(f, "'{n}"),
             Type::Int => "int".fmt(f),
             Type::Bool => "bool".fmt(f),
             Type::Fun(t, s) => {
