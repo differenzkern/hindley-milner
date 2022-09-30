@@ -6,5 +6,5 @@ the two papers that I used for understanding and implementing hindley-milner typ
 * [Algorithm W Step by Step](https://raw.githubusercontent.com/mgrabmueller/AlgorithmW/master/pdf/AlgorithmW.pdf)
 
 Planned features:
-* inductive types and pattern matching
+* algebraic types and pattern matching
 * system f/parametric polymorphism
