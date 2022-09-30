@@ -9,7 +9,7 @@ use ariadne::{Label, ReportBuilder};
 
 use crate::{parser::Spanned, Algebraic, Clause, Expr, Literal, Name, Type};
 
-trait Types {
+pub trait Types {
     fn ftv(&self) -> Set<String>;
     fn apply(&mut self, s: &Subst);
 }

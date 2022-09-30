@@ -1,8 +1,6 @@
 type Nat = Zero | S Nat
 type Bool = True | False
 
-fun neg b = match b | True → False | False → False
+fun plus n m = match m | Zero → n | S m → S (plus n m)
 
-fun neg2 b = match b | True → False | False → neg False
-
-sub1 n = match n | Zero → Zero | S n → n
+/* fun foo n m = match n | Zero → λm.m | S l → l */

@@ -5,7 +5,7 @@ use ariadne::{Report, ReportKind, Source};
 use check::{Namespace, TIState, TypeEnv};
 use parser::Spanned;
 
-use crate::check::{type_check, Scheme};
+use crate::check::{type_check, Scheme, Types};
 use crate::parser::parse;
 
 mod check;
@@ -64,22 +64,54 @@ fn main() -> std::io::Result<()> {
             Toplevel::Fun(fun) => {
                 let Function {
                     name,
-                    mut body,
+                    body,
                     arguments,
                 } = fun;
 
-                for args in arguments.into_iter().rev() {
-                    let span = body.1.clone();
-                    body = Spanned(Expr::Abs(args, Rc::new(body)), span);
+                dbg!(&body);
+
+                let return_ty = state.new_type_var("'");
+
+                let mut iter = arguments.iter().rev();
+
+                let mut instantiate = |arg: &String| {
+                    let ty = state.new_type_var("'");
+                    env.0.insert(arg.clone(), Scheme(vec![], ty.clone()));
+
+                    ty
+                };
+
+                let mut fun_ty = Type::Fun(
+                    Box::new(instantiate(iter.next().unwrap())),
+                    Box::new(return_ty),
+                );
+
+                for arg in iter {
+                    fun_ty = Type::Fun(Box::new(instantiate(arg)), Box::new(fun_ty));
                 }
+
+                env.0.insert(name, Scheme(vec![], fun_ty.clone()));
 
                 let body = Rc::new(body);
 
-                if type_check(&namespace, &body, &mut env, &mut state, &mut report).is_err() {
-                    report.finish().print(Source::from(&input))?;
+                match state.ti(&namespace, &env, &body, &mut report, 0) {
+                    Ok((s, _)) => {
+                        fun_ty.apply(&s);
+
+                        print!("fun");
+
+                        for args in arguments {
+                            print!(" {args}");
+                        }
+
+                        println!(" = {body}: {fun_ty}");
+                    }
+                    Err(_) => {
+                        report.finish().print(Source::from(&input))?;
+                    }
                 }
 
-                assert!(namespace.insert(name, Name::Function(body)).is_none());
+                //assert!(namespace.insert(name, Name::Function(Rc::new(body))).is_none());
             }
             Toplevel::Expr(expr) => {
                 let expr = Rc::new(expr);
@@ -241,7 +273,7 @@ impl Display for Clause {
             expr,
         } = self;
 
-        write!(f, "| {constructor}")?;
+        write!(f, " | {constructor}")?;
 
         for var in variables {
             write!(f, " {var}")?;
