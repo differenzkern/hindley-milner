@@ -1,17 +1,24 @@
-use std::{collections::{HashMap as Map, HashSet as Set}, fmt::Display, rc::Rc};
+use std::{
+    collections::{HashMap as Map, HashSet as Set},
+    fmt::Display,
+    rc::Rc,
+};
 
-use crate::{check::{Scheme, Types, Subst}, Type};
+use crate::{
+    check::{Scheme, Subst, Types},
+    Type,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct TypeEnv {
     env: Map<Rc<str>, Scheme>,
-    undo_stack: Vec<UndoAction>
+    undo_stack: Vec<UndoAction>,
 }
 
 #[derive(Debug, Clone)]
 pub enum UndoAction {
     Insert(Rc<str>, Scheme),
-    Remove(Rc<str>)
+    Remove(Rc<str>),
 }
 
 impl TypeEnv {
@@ -46,8 +53,12 @@ impl TypeEnv {
     pub fn undo(&mut self, pos: usize) {
         while self.undo_stack.len() > pos {
             match self.undo_stack.pop().unwrap() {
-                UndoAction::Insert(name, scheme) => { self.env.insert(name, scheme); },
-                UndoAction::Remove(name) => { self.env.remove(&name); },
+                UndoAction::Insert(name, scheme) => {
+                    self.env.insert(name, scheme);
+                }
+                UndoAction::Remove(name) => {
+                    self.env.remove(&name);
+                }
             }
         }
     }

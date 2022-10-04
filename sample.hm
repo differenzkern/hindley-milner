@@ -1,6 +1,5 @@
-type Nat = Zero | S Nat
 type Bool = True | False
+λx.match x | True → False | False → True
 
-fun plus n m = match m | Zero → n | S m → S (plus n m)
-
-/* fun foo n m = match n | Zero → λm.m | S l → l */
+fun neg_curried = λx. match x | True → False | False → True
+fun neg_uncurried x = match x | True → False | False → True
