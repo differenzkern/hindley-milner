@@ -50,7 +50,7 @@ impl TypeEnv {
         }
     }
 
-    pub fn undo(&mut self, pos: usize) {
+    pub fn restore(&mut self, pos: usize) {
         while self.undo_stack.len() > pos {
             match self.undo_stack.pop().unwrap() {
                 UndoAction::Insert(name, scheme) => {

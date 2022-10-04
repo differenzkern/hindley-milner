@@ -3,7 +3,7 @@ use std::{fmt::Display, ops::Deref, rc::Rc};
 use ariadne::{Color, Fmt, Label, Report, ReportKind, Source};
 use chumsky::{prelude::*, Stream};
 
-use crate::{Algebraic, Clause, Constructor, Expr, Function, Literal, Toplevel};
+use crate::{Clause, Constructor, Expr, Function, Literal, Toplevel, ADT};
 
 pub type Span = std::ops::Range<usize>;
 
@@ -164,7 +164,7 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
         .ignore_then(ident.map(Rc::from))
         .then(ident.map(Rc::from).repeated())
         .then_ignore(just(Token::Ctrl('=')))
-        .then(expr.clone())
+        .then(expr.clone().map(Rc::from))
         .map(|((name, arguments), body)| {
             Toplevel::Fun(Function {
                 name,
@@ -182,7 +182,7 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
         .ignore_then(ident.map(Rc::from))
         .then_ignore(just(Token::Ctrl('=')))
         .then(constructor.separated_by(just(Token::Ctrl('|'))))
-        .map(|(name, constructors)| Toplevel::Algebraic(Algebraic { name, constructors }));
+        .map(|(name, constructors)| Toplevel::ADT(ADT { name, constructors }));
 
     function.or(inductive).or(expr.clone().map(Toplevel::Expr))
 }
