@@ -55,7 +55,7 @@ impl Display for Token {
             Token::Num(num) => num.fmt(f),
             Token::Let => "let".fmt(f),
             Token::In => "in".fmt(f),
-            Token::Newline => "\n".fmt(f)
+            Token::Newline => "\n".fmt(f),
         }
     }
 }
@@ -63,7 +63,11 @@ impl Display for Token {
 fn spanned_lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
     let num = text::int(10).map(Token::Num);
 
-    let newline = just("\n").repeated().at_least(1).ignored().map(|_| Token::Newline);
+    let newline = just("\n")
+        .repeated()
+        .at_least(1)
+        .ignored()
+        .map(|_| Token::Newline);
     let ctrl = one_of("|()=λ.→").map(Token::Ctrl);
     let ident = text::ident().map(|ident: String| match ident.as_str() {
         "fun" => Token::Function,
@@ -169,7 +173,8 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
             })
         });
 
-    let constructor = select!(Token::Ident(constructor) => constructor).map(Rc::from)
+    let constructor = select!(Token::Ident(constructor) => constructor)
+        .map(Rc::from)
         .then(ident.map(Rc::from).repeated())
         .map(|(name, arguments)| Constructor { name, arguments });
 
@@ -179,9 +184,7 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
         .then(constructor.separated_by(just(Token::Ctrl('|'))))
         .map(|(name, constructors)| Toplevel::Algebraic(Algebraic { name, constructors }));
 
-    function
-        .or(inductive)
-        .or(expr.clone().map(Toplevel::Expr))
+    function.or(inductive).or(expr.clone().map(Toplevel::Expr))
 }
 
 pub fn parse(src: &str) -> Vec<Toplevel> {
@@ -189,12 +192,12 @@ pub fn parse(src: &str) -> Vec<Toplevel> {
 
     let (tokens, tokenize_errs) = spanned_lexer().parse_recovery(src);
 
-    dbg!(&tokens);
-
-    let (toplevel, parse_errs) = spanned_parser().separated_by(just(Token::Newline).repeated()).parse_recovery(Stream::from_iter(
-        len..len + 1,
-        tokens.unwrap_or_default().into_iter(),
-    ));
+    let (toplevel, parse_errs) = spanned_parser()
+        .separated_by(just(Token::Newline).repeated())
+        .parse_recovery(Stream::from_iter(
+            len..len + 1,
+            tokens.unwrap_or_default().into_iter(),
+        ));
 
     tokenize_errs
         .into_iter()

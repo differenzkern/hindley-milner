@@ -3,8 +3,8 @@ use std::{fmt::Display, rc::Rc};
 
 use ariadne::{Report, ReportKind, Source};
 use check::{Namespace, TIState};
-use type_env::TypeEnv;
 use parser::Spanned;
+use type_env::TypeEnv;
 
 use crate::check::{type_check, Scheme, Types};
 use crate::parser::parse;
@@ -30,7 +30,6 @@ fn main() -> std::io::Result<()> {
 
     let mut state = TIState::default();
     let mut env = TypeEnv::default();
-
 
     for toplevel in toplevel {
         let mut report = Report::build(ReportKind::Error, (), 0);
@@ -75,7 +74,7 @@ fn main() -> std::io::Result<()> {
 
                 let mut iter = arguments.iter().rev();
 
-                let mut fun_ty = if arguments.len() > 0 {
+                let mut fun_ty = if !arguments.is_empty() {
                     let mut instantiate = |arg: &Rc<str>| {
                         let ty = state.new_type_var();
                         env.insert(arg.clone(), Scheme(vec![], ty.clone()));
@@ -84,7 +83,7 @@ fn main() -> std::io::Result<()> {
 
                     let mut fun_ty = Type::Fun(
                         Box::new(instantiate(iter.next().unwrap())),
-                        Box::new(return_ty),
+                        Box::new(return_ty.clone()),
                     );
 
                     for arg in iter {
@@ -93,7 +92,7 @@ fn main() -> std::io::Result<()> {
 
                     fun_ty
                 } else {
-                    return_ty
+                    return_ty.clone()
                 };
 
                 env.insert(name, Scheme(vec![], fun_ty.clone()));
@@ -104,7 +103,7 @@ fn main() -> std::io::Result<()> {
                     Ok((mut s, mut ty)) => {
                         ty.apply(&s);
 
-                        let s_ = state.unify(&fun_ty, &ty).unwrap();
+                        let s_ = state.unify(&return_ty, &ty).unwrap();
                         s = s_.compose(&s);
                         fun_ty.apply(&s);
 
@@ -115,8 +114,6 @@ fn main() -> std::io::Result<()> {
                         }
 
                         println!(" = {body}: {fun_ty}");
-
-
                     }
                     Err(_) => {
                         report.finish().print(Source::from(&input))?;

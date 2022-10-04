@@ -191,7 +191,7 @@ impl TIState {
     ) -> Result<(Subst, Type), ()> {
         let savepoint = env.savepoint();
 
-        println!("{}>{env} ├ {exp}", " ".repeat(depth as usize));
+        //println!("{}>{env} ├ {exp}", " ".repeat(depth as usize));
 
         let span = exp.deref().1.clone();
 
@@ -278,7 +278,7 @@ impl TIState {
                 };
                 let mut output_ty = self.new_type_var();
 
-                env.remove(&name);
+                env.remove(name);
 
                 let mut s = Subst::null();
 
@@ -313,10 +313,10 @@ impl TIState {
 
         env.undo(savepoint);
 
-        println!(
+        /*println!(
             "{}<{env} ├ {exp}: {t} ┤ {subst}",
             " ".repeat(depth as usize)
-        );
+        );*/
 
         Ok((subst, t))
     }
@@ -376,16 +376,13 @@ impl TIState {
             );
         }
 
-        let res = match self.ti(namespace, env, &clause.expr, report, depth + 1) {
-            Ok((s_, ty)) => { Ok((s.compose(&s_), ty))},
+        match self.ti(namespace, env, &clause.expr, report, depth + 1) {
+            Ok((s_, ty)) => Ok((s.compose(&s_), ty)),
             Err(err) => {
                 env.undo(savepoint);
                 Err(err)
-            },
-        };
-
-        println!("{}{env}", " ".repeat(depth as usize + 1 as usize));
-        res
+            }
+        }
     }
 }
 
