@@ -7,28 +7,27 @@ use std::{
 
 use ariadne::{Label, ReportBuilder};
 
-use crate::{parser::Spanned, Algebraic, Clause, Expr, Literal, Name, Type};
+use crate::{parser::Spanned, type_env::TypeEnv, Algebraic, Clause, Expr, Literal, Name, Type};
 
 pub trait Types {
-    fn ftv(&self) -> Set<String>;
+    fn ftv(&self) -> Set<usize>;
     fn apply(&mut self, s: &Subst);
 }
 
 impl Types for Type {
-    fn ftv(&self) -> Set<String> {
+    fn ftv(&self) -> Set<usize> {
         match self {
             Type::Algebraic(_) => Set::new(),
-            Type::Var(v) => [v.clone()].into(),
+            Type::Var(v) => [*v].into(),
             Type::Int => Set::new(),
-            Type::Bool => Set::new(),
-            Type::Fun(x, y) => x.ftv().union(&y.ftv()).map(String::to_owned).collect(),
+            Type::Fun(x, y) => x.ftv().union(&y.ftv()).copied().collect(),
         }
     }
 
     fn apply(&mut self, sub: &Subst) {
         match self {
             Type::Var(n) => {
-                if let Some(t) = sub.0.get(n) {
+                if let Some(t) = sub.0.get(n.deref()) {
                     *self = t.clone();
                 }
             }
@@ -42,7 +41,7 @@ impl Types for Type {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Scheme(pub Vec<String>, pub Type);
+pub struct Scheme(pub Vec<usize>, pub Type);
 
 impl Display for Scheme {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -65,17 +64,17 @@ impl Types for Scheme {
         let mut s = sub.clone();
 
         for name in &self.0 {
-            s.0.remove(name);
+            s.0.remove(name.deref());
         }
 
         self.1.apply(&s);
     }
 
-    fn ftv(&self) -> Set<String> {
+    fn ftv(&self) -> Set<usize> {
         let mut set = self.1.ftv();
 
         for var in &self.0 {
-            set.remove(var);
+            set.remove(var.deref());
         }
 
         set
@@ -83,7 +82,7 @@ impl Types for Scheme {
 }
 
 impl<T: Types> Types for Vec<T> {
-    fn ftv(&self) -> Set<String> {
+    fn ftv(&self) -> Set<usize> {
         let mut set = Set::new();
 
         for t in self {
@@ -102,58 +101,13 @@ impl<T: Types> Types for Vec<T> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TypeEnv(pub Map<String, Scheme>);
-
-impl Display for TypeEnv {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut iter = self.0.iter();
-
-        if let Some((key, value)) = iter.next() {
-            write!(f, "{key}: {value}")?;
-            for (key, value) in iter {
-                write!(f, ", {key}: {value}")?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl TypeEnv {
-    pub fn remove(&mut self, var: &str) {
-        self.0.remove(var);
-    }
-
-    pub fn generalize(&self, ty: &Type) -> Scheme {
-        let mut vars = ty.ftv();
-
-        for name in &self.ftv() {
-            vars.remove(name);
-        }
-
-        Scheme(vars.into_iter().collect(), ty.clone())
-    }
-}
-
-impl Types for TypeEnv {
-    fn ftv(&self) -> Set<String> {
-        self.0.values().cloned().collect::<Vec<Scheme>>().ftv()
-    }
-
-    fn apply(&mut self, s: &Subst) {
-        for value in self.0.values_mut() {
-            value.apply(s);
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default)]
-pub struct TIState(u64);
+pub struct TIState(usize);
 
+#[derive(Debug, Clone)]
 pub enum UnificationError {
     IncombatibleTypes(String, String),
-    OccursIn(String, String),
+    OccursIn(usize, String),
 }
 
 impl Display for UnificationError {
@@ -163,17 +117,17 @@ impl Display for UnificationError {
                 write!(f, "failed to unify {ty1} with {ty2}: unequal types")
             }
             UnificationError::OccursIn(s, ty) => {
-                write!(f, "failed to unify {s} with {ty}: {s} occurs in {ty}")
+                write!(f, "failed to unify '{s} with {ty}: '{s} occurs in {ty}")
             }
         }
     }
 }
 
 impl TIState {
-    pub fn new_type_var(&mut self, prefix: &str) -> Type {
+    pub fn new_type_var(&mut self) -> Type {
         self.0 += 1;
 
-        Type::Var(format!("{prefix}{}", self.0))
+        Type::Var(self.0 - 1)
     }
 
     pub fn unify(&mut self, ty1: &Type, ty2: &Type) -> Result<Subst, UnificationError> {
@@ -188,9 +142,8 @@ impl TIState {
                 let s2 = self.unify(&r, &r_)?;
                 Ok(s1.compose(&s2))
             }
-            (Type::Var(u), t) | (t, Type::Var(u)) => self.var_bind(u, t),
+            (Type::Var(u), t) | (t, Type::Var(u)) => self.var_bind(*u, t),
             (Type::Int, Type::Int) => Ok(Subst::null()),
-            (Type::Bool, Type::Bool) => Ok(Subst::null()),
             (Type::Algebraic(n), Type::Algebraic(m)) if n == m => Ok(Subst::null()),
             (ty1, ty2) => Err(UnificationError::IncombatibleTypes(
                 ty1.to_string(),
@@ -199,26 +152,26 @@ impl TIState {
         }
     }
 
-    pub fn var_bind(&self, s: &str, ty: &Type) -> Result<Subst, UnificationError> {
-        if let Type::Var(var) = ty {
-            if s == var {
+    pub fn var_bind(&self, var: usize, ty: &Type) -> Result<Subst, UnificationError> {
+        if let Type::Var(var_) = ty {
+            if var == *var_ {
                 return Ok(Subst::null());
             }
         }
 
-        if ty.ftv().contains(s) {
-            return Err(UnificationError::OccursIn(s.to_string(), ty.to_string()));
+        if ty.ftv().contains(&var) {
+            return Err(UnificationError::OccursIn(var, ty.to_string()));
         }
 
-        Ok(Subst::singleton(s.to_owned(), ty.clone()))
+        Ok(Subst::singleton(var, ty.clone()))
     }
 
     pub fn instantiate(&mut self, scheme: &Scheme) -> Type {
         let mut map = Map::new();
 
         for var in &scheme.0 {
-            let nvar = self.new_type_var("a");
-            map.insert(var.clone(), nvar);
+            let nvar = self.new_type_var();
+            map.insert(*var, nvar);
         }
 
         let mut t = scheme.1.clone();
@@ -231,24 +184,24 @@ impl TIState {
     pub fn ti(
         &mut self,
         namespace: &Namespace,
-        env: &TypeEnv,
+        env: &mut TypeEnv,
         exp: &Rc<Spanned<Expr>>,
         report: &mut ReportBuilder<Range<usize>>,
         depth: u64,
     ) -> Result<(Subst, Type), ()> {
-        let orig = env.clone();
+        let savepoint = env.savepoint();
 
         println!("{}>{env} ├ {exp}", " ".repeat(depth as usize));
 
         let span = exp.deref().1.clone();
 
         let (subst, t) = match exp.deref().deref() {
-            Expr::Var(n) => match env.0.get(n) {
+            Expr::Var(n) => match env.get(n) {
                 Some(sigma) => {
                     let t = self.instantiate(sigma);
                     (Subst::null(), t)
                 }
-                None => match namespace.0.get(n) {
+                None => match namespace.0.get(n.deref()) {
                     Some(n_) => match n_ {
                         Name::Constructor { r#type, .. } => {
                             (Subst::null(), Type::Algebraic(r#type.name.clone()))
@@ -271,27 +224,23 @@ impl TIState {
             },
             Expr::Lit(lit) => match lit {
                 Literal::Num(_) => (Subst::null(), Type::Int),
-                Literal::Bool(_) => (Subst::null(), Type::Bool),
             },
             Expr::Abs(n, e) => {
-                let mut tv = self.new_type_var("a");
-                let mut env = env.clone();
-                env.remove(n);
-                env.0.insert(n.to_owned(), Scheme(vec![], tv.clone()));
-                let (s1, t1) = self.ti(namespace, &env, e, report, depth + 1)?;
+                let mut tv = self.new_type_var();
+                env.insert(n.to_owned(), Scheme(vec![], tv.clone()));
+                let (s1, t1) = self.ti(namespace, env, e, report, depth + 1)?;
                 tv.apply(&s1);
 
                 (s1, Type::Fun(Box::new(tv), Box::new(t1)))
             }
             Expr::App(e1, e2) => {
-                let mut tv = self.new_type_var("a");
+                let mut tv = self.new_type_var();
 
                 let (s1, mut t1) = self.ti(namespace, env, e1, report, depth + 1)?;
 
-                let mut env = env.clone();
                 env.apply(&s1);
 
-                let (s2, t2) = self.ti(namespace, &env, e2, report, depth + 1)?;
+                let (s2, t2) = self.ti(namespace, env, e2, report, depth + 1)?;
 
                 t1.apply(&s2);
 
@@ -313,116 +262,59 @@ impl TIState {
                     env.generalize(&t1)
                 };
 
-                let mut env = env.clone();
-                env.remove(x);
-                env.0.insert(x.to_owned(), t_);
+                env.insert(x.to_owned(), t_);
                 env.apply(&s1);
 
-                let (s2, t2) = self.ti(namespace, &env, e2, report, depth + 1)?;
+                let (s2, t2) = self.ti(namespace, env, e2, report, depth + 1)?;
                 (s1.compose(&s2), t2)
             }
-            Expr::Match(name, arms) => match env.0.get(&**name) {
-                Some(ty) => {
-                    let mut ty = self.instantiate(ty);
-
-                    if arms.is_empty() {
-                        report.add_label(Label::new(span.end..span.end));
-                    }
-
-                    let mut env_ = env.clone();
-
-                    let matching_type = namespace
-                        .expect_constructor(
-                            &arms[0].constructor.0,
-                            arms[0].constructor.span(),
-                            report,
-                        )
-                        .unwrap()
-                        .unwrap()
-                        .1
-                        .to_owned();
-
-                    let mut s = self
-                        .unify(&ty, &Type::Algebraic(matching_type.name.clone()))
-                        .map_err(|err| {
-                            report.add_label(Label::new(name.span()).with_message(err.to_string()))
-                        })?;
-                    env_.apply(&s);
-                    ty.apply(&s);
-
-                    //env_.remove(&name);
-
-                    let (s_, mut ty) =
-                        self.check_match_arm(namespace, &env_, &arms[0], report, depth)?;
-                    env_.apply(&s_);
-                    ty.apply(&s_);
-                    s = s_.compose(&s);
-
-                    for clause in &arms[1..] {
-                        let (s_, ty_) =
-                            self.check_match_arm(namespace, &env_, clause, report, depth)?;
-                        env_.apply(&s_);
-                        ty.apply(&s_);
-
-                        s = s_.compose(&s);
-
-                        let s_ =
-                            self.unify(&ty, &ty_).map_err(|err| {
-                                report.set_message(format!("failed to unify match arms: {err}"));
-                                report.add_label(Label::new(clause.span()).with_message(
-                                    "failed to unify this match arm with the previous",
-                                ));
-                            })?;
-                        env_.apply(&s_);
-                        ty.apply(&s_);
-
-                        s = s_.compose(&s);
-                    }
-
-                    let mut coverage = Set::new();
-
-                    for clause in arms {
-                        let (idx, r#type) = namespace
-                            .expect_constructor(&clause.constructor, clause.span(), report)
-                            .unwrap()
-                            .unwrap();
-
-                        if &matching_type != r#type {
-                            report.set_message("matched constructores have incompatible types");
-                            report.add_label(
-                                Label::new(arms[0].0.constructor.span())
-                                    .with_message(format!("this has type {}", matching_type.name)),
-                            );
-                            report.add_label(
-                                Label::new(clause.0.constructor.span())
-                                    .with_message(format!("this has type {}", r#type.name)),
-                            );
-
-                            return Err(());
-                        }
-
-                        assert!(coverage.insert(idx));
-                    }
-
-                    if coverage.len() != matching_type.constructors.len() {
-                        report.add_label(
-                            Label::new(span).with_message("not all constructors covered"),
-                        );
-
+            Expr::Match(name, arms) => {
+                let mut input_ty = match env.get(&**name) {
+                    Some(ty) => self.instantiate(ty),
+                    None => {
+                        report.add_label(Label::new(name.span()).with_message("unbound variable"));
                         return Err(());
                     }
+                };
+                let mut output_ty = self.new_type_var();
 
-                    (s, ty)
+                env.remove(&name);
+
+                let mut s = Subst::null();
+
+                for clause in arms {
+                    let (s_, ty_) =
+                        self.check_match_arm(namespace, env, &mut input_ty, clause, report, depth)?;
+
+                    env.apply(&s_);
+                    input_ty.apply(&s_);
+                    output_ty.apply(&s_);
+
+                    s = s_.compose(&s);
+
+                    let s_ = self.unify(&output_ty, &ty_).map_err(|err| {
+                        report.set_message(format!("failed to unify match arms: {err}"));
+                        report.add_label(
+                            Label::new(clause.span())
+                                .with_message("failed to unify this match arm with the previous"),
+                        );
+                    })?;
+
+                    env.apply(&s_);
+                    input_ty.apply(&s_);
+                    output_ty.apply(&s_);
+
+                    s = s_.compose(&s);
                 }
-                None => {
-                    report.add_label(Label::new(name.span()).with_message("unbound variable"));
-                    return Err(());
-                }
-            },
+
+                (s, output_ty)
+            }
         };
 
+        env.undo(savepoint);
+
         println!(
-            "{}<{orig} ├ {exp}: {t} ┤ {subst}",
+            "{}<{env} ├ {exp}: {t} ┤ {subst}",
             " ".repeat(depth as usize)
         );
 
@@ -432,11 +324,14 @@ impl TIState {
     fn check_match_arm(
         &mut self,
         namespace: &Namespace,
-        env: &TypeEnv,
+        env: &mut TypeEnv,
+        input: &mut Type,
         clause: &Clause,
         report: &mut ReportBuilder<Range<usize>>,
         depth: u64,
     ) -> Result<(Subst, Type), ()> {
+        let savepoint = env.savepoint();
+
         let (idx, r#type) = namespace
             .expect_constructor(&clause.constructor.0, clause.constructor.span(), report)?
             .ok_or_else(|| {
@@ -460,23 +355,44 @@ impl TIState {
             return Err(());
         }
 
-        let mut env_ = env.clone();
+        let s = self
+            .unify(input, &Type::Algebraic(r#type.name.clone()))
+            .map_err(|err| {
+                report.set_message(format!(
+                    "failed to unify match arms with matched variable: {err}"
+                ));
+                report.add_label(Label::new(
+                    clause.constructor.span().start..clause.constructor.span().start,
+                ));
+            })?;
+
+        input.apply(&s);
+        env.apply(&s);
 
         for (ty, name) in constructor.arguments.iter().zip(clause.variables.iter()) {
-            env_.0.insert(
-                name.0.to_owned(),
-                Scheme(vec![], Type::Algebraic(ty.to_owned())),
+            env.insert(
+                name.0.clone(),
+                Scheme(vec![], Type::Algebraic(Rc::from(ty.deref()))),
             );
         }
 
-        self.ti(namespace, env, &clause.expr, report, depth + 1)
+        let res = match self.ti(namespace, env, &clause.expr, report, depth + 1) {
+            Ok((s_, ty)) => { Ok((s.compose(&s_), ty))},
+            Err(err) => {
+                env.undo(savepoint);
+                Err(err)
+            },
+        };
+
+        println!("{}{env}", " ".repeat(depth as usize + 1 as usize));
+        res
     }
 }
 
-pub struct Namespace(pub Map<String, Name>);
+pub struct Namespace(pub Map<Rc<str>, Name>);
 
 impl Deref for Namespace {
-    type Target = Map<String, Name>;
+    type Target = Map<Rc<str>, Name>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -518,7 +434,7 @@ impl Namespace {
 }
 
 #[derive(Clone, Default)]
-pub struct Subst(Map<String, Type>);
+pub struct Subst(Map<usize, Type>);
 
 impl Display for Subst {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -546,7 +462,7 @@ impl Subst {
         Self(Map::new())
     }
 
-    pub fn singleton(x: String, t: Type) -> Self {
+    pub fn singleton(x: usize, t: Type) -> Self {
         let mut map = Map::new();
         map.insert(x, t);
 
@@ -560,7 +476,7 @@ impl Subst {
             let mut y = y.clone();
             y.apply(self);
 
-            subst.0.insert(x.to_string(), y);
+            subst.0.insert(*x, y);
         }
 
         subst

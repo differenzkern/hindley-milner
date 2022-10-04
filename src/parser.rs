@@ -38,9 +38,8 @@ pub enum Token {
     Inductive,
     Ctrl(char),
     Ident(String),
-    True,
-    False,
     Num(String),
+    Newline,
     Let,
     In,
 }
@@ -53,11 +52,10 @@ impl Display for Token {
             Token::Inductive => "type".fmt(f),
             Token::Ctrl(c) => c.fmt(f),
             Token::Ident(ident) => ident.fmt(f),
-            Token::True => "true".fmt(f),
-            Token::False => "false".fmt(f),
             Token::Num(num) => num.fmt(f),
             Token::Let => "let".fmt(f),
             Token::In => "in".fmt(f),
+            Token::Newline => "\n".fmt(f)
         }
     }
 }
@@ -65,45 +63,45 @@ impl Display for Token {
 fn spanned_lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
     let num = text::int(10).map(Token::Num);
 
+    let newline = just("\n").repeated().at_least(1).ignored().map(|_| Token::Newline);
     let ctrl = one_of("|()=λ.→").map(Token::Ctrl);
     let ident = text::ident().map(|ident: String| match ident.as_str() {
         "fun" => Token::Function,
         "type" => Token::Inductive,
         "match" => Token::Match,
-        "true" => Token::True,
-        "false" => Token::False,
+        "let" => Token::Let,
+        "in" => Token::In,
         _ => Token::Ident(ident),
     });
 
     let token = num
         .or(ctrl)
         .or(ident)
+        .or(newline)
         .recover_with(skip_then_retry_until([]));
 
-    let comment = just("/*").then(take_until(just("*/"))).padded();
+    let comment = just("/*").then(take_until(just("*/")));
 
     token
         .map_with_span(|token, span| (token, span))
+        .padded_by(one_of(" \t").repeated())
         .padded_by(comment.repeated())
-        .padded()
         .repeated()
 }
 
-fn spanned_parser() -> impl Parser<Token, Vec<Toplevel>, Error = Simple<Token>> {
+fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
     let expr = recursive(|expr| {
         let brackets = expr
             .clone()
             .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')));
 
         let val = select! {
-            Token::True => Expr::Lit(Literal::Bool(true)),
-            Token::False => Expr::Lit(Literal::Bool(false)),
             Token::Num(n) => Expr::Lit(Literal::Num(n.parse::<u64>().unwrap()))
         };
 
         let ident = select! { Token::Ident(ident) => ident };
 
-        let spanned_ident = ident.map_with_span(Spanned);
+        let spanned_ident = ident.map(Rc::from).map_with_span(Spanned);
 
         let r#let = just(Token::Let)
             .ignore_then(ident)
@@ -111,17 +109,17 @@ fn spanned_parser() -> impl Parser<Token, Vec<Toplevel>, Error = Simple<Token>> 
             .then(expr.clone())
             .then_ignore(just(Token::In))
             .then(expr.clone())
-            .map(|((name, val), expr)| Expr::Let(name, Rc::new(val), Rc::new(expr)));
+            .map(|((name, val), expr)| Expr::Let(Rc::from(name), Rc::new(val), Rc::new(expr)));
 
         let lambda = just(Token::Ctrl('λ'))
             .ignore_then(ident)
             .then_ignore(just(Token::Ctrl('.')))
             .then(expr.clone())
-            .map(|(a, b)| Expr::Abs(a, Rc::new(b)));
+            .map(|(a, b)| Expr::Abs(Rc::from(a), Rc::new(b)));
 
         let clause = just(Token::Ctrl('|'))
-            .ignore_then(ident.map_with_span(Spanned))
-            .then(ident.map_with_span(Spanned).repeated())
+            .ignore_then(ident.map(Rc::from).map_with_span(Spanned))
+            .then(ident.map(Rc::from).map_with_span(Spanned).repeated())
             .then_ignore(just(Token::Ctrl('→')))
             .then(expr.clone())
             .map_with_span(|((constructor, variables), expr), span| {
@@ -144,7 +142,7 @@ fn spanned_parser() -> impl Parser<Token, Vec<Toplevel>, Error = Simple<Token>> 
             .or(r#let)
             .or(lambda)
             .or(r#match)
-            .or(ident.map(Expr::Var))
+            .or(ident.map(Rc::from).map(Expr::Var))
             .map_with_span(Spanned));
 
         atom.clone().then(atom.repeated()).map(|(atom, rem)| {
@@ -159,8 +157,8 @@ fn spanned_parser() -> impl Parser<Token, Vec<Toplevel>, Error = Simple<Token>> 
     let ident = select!(Token::Ident(ident) => ident);
 
     let function = just(Token::Function)
-        .ignore_then(ident)
-        .then(ident.repeated())
+        .ignore_then(ident.map(Rc::from))
+        .then(ident.map(Rc::from).repeated())
         .then_ignore(just(Token::Ctrl('=')))
         .then(expr.clone())
         .map(|((name, arguments), body)| {
@@ -171,12 +169,12 @@ fn spanned_parser() -> impl Parser<Token, Vec<Toplevel>, Error = Simple<Token>> 
             })
         });
 
-    let constructor = select!(Token::Ident(constructor) => constructor)
-        .then(ident.repeated())
+    let constructor = select!(Token::Ident(constructor) => constructor).map(Rc::from)
+        .then(ident.map(Rc::from).repeated())
         .map(|(name, arguments)| Constructor { name, arguments });
 
     let inductive = just(Token::Inductive)
-        .ignore_then(ident)
+        .ignore_then(ident.map(Rc::from))
         .then_ignore(just(Token::Ctrl('=')))
         .then(constructor.separated_by(just(Token::Ctrl('|'))))
         .map(|(name, constructors)| Toplevel::Algebraic(Algebraic { name, constructors }));
@@ -184,7 +182,6 @@ fn spanned_parser() -> impl Parser<Token, Vec<Toplevel>, Error = Simple<Token>> 
     function
         .or(inductive)
         .or(expr.clone().map(Toplevel::Expr))
-        .repeated()
 }
 
 pub fn parse(src: &str) -> Vec<Toplevel> {
@@ -192,7 +189,9 @@ pub fn parse(src: &str) -> Vec<Toplevel> {
 
     let (tokens, tokenize_errs) = spanned_lexer().parse_recovery(src);
 
-    let (toplevel, parse_errs) = spanned_parser().parse_recovery(Stream::from_iter(
+    dbg!(&tokens);
+
+    let (toplevel, parse_errs) = spanned_parser().separated_by(just(Token::Newline).repeated()).parse_recovery(Stream::from_iter(
         len..len + 1,
         tokens.unwrap_or_default().into_iter(),
     ));
@@ -202,8 +201,6 @@ pub fn parse(src: &str) -> Vec<Toplevel> {
         .map(|e| e.map(|c| c.to_string()))
         .chain(parse_errs.into_iter().map(|e| e.map(|tok| tok.to_string())))
         .for_each(|e| {
-            dbg!(&e);
-
             let report = Report::build(ReportKind::Error, (), e.span().start);
 
             let report = match e.reason() {

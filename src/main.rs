@@ -2,7 +2,8 @@ use std::collections::HashMap as Map;
 use std::{fmt::Display, rc::Rc};
 
 use ariadne::{Report, ReportKind, Source};
-use check::{Namespace, TIState, TypeEnv};
+use check::{Namespace, TIState};
+use type_env::TypeEnv;
 use parser::Spanned;
 
 use crate::check::{type_check, Scheme, Types};
@@ -10,6 +11,7 @@ use crate::parser::parse;
 
 mod check;
 mod parser;
+mod type_env;
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -27,7 +29,8 @@ fn main() -> std::io::Result<()> {
     let mut namespace = Namespace(Map::new());
 
     let mut state = TIState::default();
-    let mut env = TypeEnv(Map::new());
+    let mut env = TypeEnv::default();
+
 
     for toplevel in toplevel {
         let mut report = Report::build(ReportKind::Error, (), 0);
@@ -54,7 +57,7 @@ fn main() -> std::io::Result<()> {
                             Type::Fun(Box::new(Type::Algebraic(arg.clone())), Box::new(r#type));
                     }
 
-                    env.0.insert(con.name.clone(), Scheme(vec![], r#type));
+                    env.insert(con.name.clone(), Scheme(vec![], r#type));
                 }
 
                 assert!(namespace
@@ -68,34 +71,41 @@ fn main() -> std::io::Result<()> {
                     arguments,
                 } = fun;
 
-                dbg!(&body);
-
-                let return_ty = state.new_type_var("'");
+                let return_ty = state.new_type_var();
 
                 let mut iter = arguments.iter().rev();
 
-                let mut instantiate = |arg: &String| {
-                    let ty = state.new_type_var("'");
-                    env.0.insert(arg.clone(), Scheme(vec![], ty.clone()));
+                let mut fun_ty = if arguments.len() > 0 {
+                    let mut instantiate = |arg: &Rc<str>| {
+                        let ty = state.new_type_var();
+                        env.insert(arg.clone(), Scheme(vec![], ty.clone()));
+                        ty
+                    };
 
-                    ty
+                    let mut fun_ty = Type::Fun(
+                        Box::new(instantiate(iter.next().unwrap())),
+                        Box::new(return_ty),
+                    );
+
+                    for arg in iter {
+                        fun_ty = Type::Fun(Box::new(instantiate(arg)), Box::new(fun_ty));
+                    }
+
+                    fun_ty
+                } else {
+                    return_ty
                 };
 
-                let mut fun_ty = Type::Fun(
-                    Box::new(instantiate(iter.next().unwrap())),
-                    Box::new(return_ty),
-                );
-
-                for arg in iter {
-                    fun_ty = Type::Fun(Box::new(instantiate(arg)), Box::new(fun_ty));
-                }
-
-                env.0.insert(name, Scheme(vec![], fun_ty.clone()));
+                env.insert(name, Scheme(vec![], fun_ty.clone()));
 
                 let body = Rc::new(body);
 
-                match state.ti(&namespace, &env, &body, &mut report, 0) {
-                    Ok((s, _)) => {
+                match state.ti(&namespace, &mut env, &body, &mut report, 0) {
+                    Ok((mut s, mut ty)) => {
+                        ty.apply(&s);
+
+                        let s_ = state.unify(&fun_ty, &ty).unwrap();
+                        s = s_.compose(&s);
                         fun_ty.apply(&s);
 
                         print!("fun");
@@ -105,6 +115,8 @@ fn main() -> std::io::Result<()> {
                         }
 
                         println!(" = {body}: {fun_ty}");
+
+
                     }
                     Err(_) => {
                         report.finish().print(Source::from(&input))?;
@@ -147,53 +159,51 @@ pub enum Toplevel {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Algebraic {
-    name: String,
+    name: Rc<str>,
     constructors: Vec<Constructor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Constructor {
-    name: String,
-    arguments: Vec<String>,
+    name: Rc<str>,
+    arguments: Vec<Rc<str>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
-    name: String,
-    arguments: Vec<String>,
+    name: Rc<str>,
+    arguments: Vec<Rc<str>>,
     body: Spanned<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    Var(String),
+    Var(Rc<str>),
     App(Rc<Spanned<Expr>>, Rc<Spanned<Expr>>),
-    Abs(String, Rc<Spanned<Expr>>),
+    Abs(Rc<str>, Rc<Spanned<Expr>>),
     Lit(Literal),
-    Let(String, Rc<Spanned<Expr>>, Rc<Spanned<Expr>>),
-    Match(Spanned<String>, Vec<Spanned<Clause>>),
+    Let(Rc<str>, Rc<Spanned<Expr>>, Rc<Spanned<Expr>>),
+    Match(Spanned<Rc<str>>, Vec<Spanned<Clause>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 
 pub struct Clause {
-    constructor: Spanned<String>,
-    variables: Vec<Spanned<String>>,
+    constructor: Spanned<Rc<str>>,
+    variables: Vec<Spanned<Rc<str>>>,
     expr: Rc<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Literal {
     Num(u64),
-    Bool(bool),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    Algebraic(String),
-    Var(String),
+    Algebraic(Rc<str>),
+    Var(usize),
     Int,
-    Bool,
     Fun(Box<Type>, Box<Type>),
 }
 
@@ -211,7 +221,6 @@ impl Display for Type {
             Type::Algebraic(n) => n.fmt(f),
             Type::Var(n) => write!(f, "'{n}"),
             Type::Int => "int".fmt(f),
-            Type::Bool => "bool".fmt(f),
             Type::Fun(t, s) => {
                 fmt_parens(t, f)?;
                 write!(f, " → {s}")
@@ -260,7 +269,6 @@ impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Literal::Num(x) => write!(f, "{x}"),
-            Literal::Bool(x) => write!(f, "{x}"),
         }
     }
 }
