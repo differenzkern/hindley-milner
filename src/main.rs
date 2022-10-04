@@ -1,12 +1,10 @@
 use std::collections::HashMap as Map;
 use std::{fmt::Display, rc::Rc};
 
-use ariadne::{Report, ReportKind, Source};
-use check::{Namespace, TIState};
+use ariadne::Source;
+use check::TIState;
 use parser::Spanned;
-use type_env::TypeEnv;
 
-use crate::check::{type_check, Scheme, Types};
 use crate::parser::parse;
 
 mod check;
@@ -24,115 +22,29 @@ fn main() -> std::io::Result<()> {
 
     let input = std::fs::read_to_string(&args.get(1).unwrap()).unwrap();
 
-    let toplevel = parse(&input);
+    let toplevel = parse(input.as_str());
 
-    let mut namespace = Namespace(Map::new());
-
-    let mut state = TIState::default();
-    let mut env = TypeEnv::default();
+    let mut ti = TIState::default();
 
     for toplevel in toplevel {
-        let mut report = Report::build(ReportKind::Error, (), 0);
-
-        match toplevel {
-            Toplevel::Algebraic(def) => {
-                let def = Rc::new(def);
-
-                for (idx, con) in def.constructors.iter().enumerate() {
-                    assert!(namespace
-                        .insert(
-                            con.name.clone(),
-                            Name::Constructor {
-                                idx,
-                                r#type: def.clone()
-                            }
-                        )
-                        .is_none());
-
-                    let mut r#type = Type::Algebraic(def.name.clone());
-
-                    for arg in con.arguments.iter().rev() {
-                        r#type =
-                            Type::Fun(Box::new(Type::Algebraic(arg.clone())), Box::new(r#type));
-                    }
-
-                    env.insert(con.name.clone(), Scheme(vec![], r#type));
+        if let Err(report) = match toplevel {
+            Toplevel::ADT(def) => ti.check_adt(Rc::from(def)),
+            Toplevel::Fun(fun) => match ti.check_fun(fun) {
+                Ok(ty) => {
+                    println!("{ty}");
+                    Ok(())
                 }
-
-                assert!(namespace
-                    .insert(def.name.clone(), Name::Type(def))
-                    .is_none());
-            }
-            Toplevel::Fun(fun) => {
-                let Function {
-                    name,
-                    body,
-                    arguments,
-                } = fun;
-
-                let return_ty = state.new_type_var();
-
-                let mut iter = arguments.iter().rev();
-
-                let mut fun_ty = if !arguments.is_empty() {
-                    let mut instantiate = |arg: &Rc<str>| {
-                        let ty = state.new_type_var();
-                        env.insert(arg.clone(), Scheme(vec![], ty.clone()));
-                        ty
-                    };
-
-                    let mut fun_ty = Type::Fun(
-                        Box::new(instantiate(iter.next().unwrap())),
-                        Box::new(return_ty.clone()),
-                    );
-
-                    for arg in iter {
-                        fun_ty = Type::Fun(Box::new(instantiate(arg)), Box::new(fun_ty));
-                    }
-
-                    fun_ty
-                } else {
-                    return_ty.clone()
-                };
-
-                env.insert(name, Scheme(vec![], fun_ty.clone()));
-
-                let body = Rc::new(body);
-
-                match state.ti(&namespace, &mut env, &body, &mut report, 0) {
-                    Ok((mut s, mut ty)) => {
-                        ty.apply(&s);
-
-                        let s_ = state.unify(&return_ty, &ty).unwrap();
-                        s = s_.compose(&s);
-                        fun_ty.apply(&s);
-
-                        print!("fun");
-
-                        for args in arguments {
-                            print!(" {args}");
-                        }
-
-                        println!(" = {body}: {fun_ty}");
-                    }
-                    Err(_) => {
-                        report.finish().print(Source::from(&input))?;
-                    }
+                Err(report) => Err(report),
+            },
+            Toplevel::Expr(expr) => match ti.check_exp(&Rc::new(expr)) {
+                Ok(ty) => {
+                    println!("{ty}");
+                    Ok(())
                 }
-
-                //assert!(namespace.insert(name, Name::Function(Rc::new(body))).is_none());
-            }
-            Toplevel::Expr(expr) => {
-                let expr = Rc::new(expr);
-                match type_check(&namespace, &expr, &mut env, &mut state, &mut report) {
-                    Ok(ty) => {
-                        println!("{expr}: {ty}");
-                    }
-                    Err(_) => {
-                        report.finish().print(Source::from(&input))?;
-                    }
-                }
-            }
+                Err(report) => Err(report),
+            },
+        } {
+            report.eprint(Source::from(&input))?;
         }
     }
 
@@ -141,21 +53,22 @@ fn main() -> std::io::Result<()> {
 
 pub struct Names(Map<String, Name>);
 
+#[derive(Debug, Clone)]
 pub enum Name {
-    Constructor { idx: usize, r#type: Rc<Algebraic> },
+    Constructor { idx: usize, r#type: Rc<ADT> },
     Function(Rc<Spanned<Expr>>),
-    Type(Rc<Algebraic>),
+    Type(Rc<ADT>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Toplevel {
-    Algebraic(Algebraic),
+    ADT(ADT),
     Fun(Function),
     Expr(Spanned<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Algebraic {
+pub struct ADT {
     name: Rc<str>,
     constructors: Vec<Constructor>,
 }
@@ -170,7 +83,7 @@ struct Constructor {
 pub struct Function {
     name: Rc<str>,
     arguments: Vec<Rc<str>>,
-    body: Spanned<Expr>,
+    body: Rc<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
