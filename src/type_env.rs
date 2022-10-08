@@ -21,6 +21,9 @@ pub enum UndoAction {
     Remove(Rc<str>),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Savepoint(usize);
+
 impl TypeEnv {
     pub fn get(&self, name: &str) -> Option<&Scheme> {
         self.env.get(name)
@@ -50,8 +53,8 @@ impl TypeEnv {
         }
     }
 
-    pub fn restore(&mut self, pos: usize) {
-        while self.undo_stack.len() > pos {
+    pub fn restore(&mut self, savepoint: Savepoint) {
+        while self.undo_stack.len() > savepoint.0 {
             match self.undo_stack.pop().unwrap() {
                 UndoAction::Insert(name, scheme) => {
                     self.env.insert(name, scheme);
@@ -63,8 +66,8 @@ impl TypeEnv {
         }
     }
 
-    pub fn savepoint(&self) -> usize {
-        self.undo_stack.len()
+    pub fn savepoint(&self) -> Savepoint {
+        Savepoint(self.undo_stack.len())
     }
 }
 
