@@ -7,7 +7,8 @@ use std::{
 
 use ariadne::{Label, Report, ReportBuilder, ReportKind};
 
-use crate::{parser::Spanned, type_env::TypeEnv, Clause, Expr, Function, Literal, Name, Type, ADT};
+use crate::{type_env::TypeEnv, Name, Type, cast};
+use crate::parse::ast::{Clause, Expr, Function, Literal, Adt, Spanned};
 
 pub trait Types {
     fn ftv(&self) -> Set<usize>;
@@ -109,7 +110,7 @@ pub struct TIState {
 }
 
 #[derive(Debug, Clone, Default)]
-struct Fresh(usize);
+pub struct Fresh(usize);
 
 impl Fresh {
     fn instantiate(&mut self, scheme: &Scheme) -> Type {
@@ -209,7 +210,7 @@ impl TIState {
                     }
                     None => {
                         report.add_label(
-                            Label::new(span).with_message(format!("unbound variable {n}")),
+                            Label::new(span.into()).with_message(format!("unbound variable {n}")),
                         );
                         Err(())
                     }
@@ -239,7 +240,7 @@ impl TIState {
                     let s3 = self
                         .unify(&t1, &Type::Fun(Box::new(t2), Box::new(tv.clone())))
                         .map_err(|err| {
-                            report.add_label(Label::new(e1.span()).with_message(err.to_string()));
+                            report.add_label(Label::new(e1.span().into()).with_message(err.to_string()));
                         })?;
                     tv.apply(&s3);
 
@@ -265,7 +266,7 @@ impl TIState {
                         Some(ty) => self.fresh.instantiate(ty),
                         None => {
                             report.add_label(
-                                Label::new(name.span()).with_message("unbound variable"),
+                                Label::new(name.span().into()).with_message("unbound variable"),
                             );
                             return Err(());
                         }
@@ -289,7 +290,7 @@ impl TIState {
                         let s_ =
                             self.unify(&output_ty, &ty_).map_err(|err| {
                                 report.set_message(format!("failed to unify match arms: {err}"));
-                                report.add_label(Label::new(clause.span()).with_message(
+                                report.add_label(Label::new(clause.span().into()).with_message(
                                     "failed to unify this match arm with the previous",
                                 ));
                             })?;
@@ -322,10 +323,10 @@ impl TIState {
 
         let (idx, r#type) = self
             .namespace
-            .expect_constructor(&clause.constructor.0, clause.constructor.span(), report)?
+            .expect_constructor(&clause.constructor.0, clause.constructor.span().into(), report)?
             .ok_or_else(|| {
                 report.add_label(
-                    Label::new(clause.constructor.span()).with_message("constructor not found"),
+                    Label::new(clause.constructor.span().into()).with_message("constructor not found"),
                 );
             })?;
 
@@ -347,7 +348,7 @@ impl TIState {
         }
 
         let s = self
-            .unify(input, &Type::Algebraic(r#type.name.clone()))
+            .unify(input, &Type::Algebraic(r#type.clone()))
             .map_err(|err| {
                 report.set_message(format!(
                     "failed to unify match arms with matched variable: {err}"
@@ -361,9 +362,11 @@ impl TIState {
         self.env.apply(&s);
 
         for (ty, name) in constructor.arguments.iter().zip(clause.variables.iter()) {
+            let ty = cast!(self.namespace.0.get(name.deref()).unwrap(), Name::Adt);
+
             self.env.insert(
                 name.0.clone(),
-                Scheme(vec![], Type::Algebraic(Rc::from(ty.deref()))),
+                Scheme(vec![], Type::Algebraic(ty.clone())),
             );
         }
 
@@ -376,7 +379,7 @@ impl TIState {
         }
     }
 
-    pub fn check_adt(&mut self, def: Rc<ADT>) -> Result<(), Report> {
+    pub fn check_adt(&mut self, def: Rc<Adt>) -> Result<(), Report> {
         for (idx, con) in def.constructors.iter().enumerate() {
             assert!(self
                 .namespace
@@ -384,15 +387,15 @@ impl TIState {
                     con.name.clone(),
                     Name::Constructor {
                         idx,
-                        r#type: def.to_owned()
+                        r#type: def.clone()
                     }
                 )
                 .is_none());
 
-            let mut r#type = Type::Algebraic(def.name.clone());
+            let mut r#type = Type::Algebraic(def.clone());
 
             for arg in con.arguments.iter().rev() {
-                r#type = Type::Fun(Box::new(Type::Algebraic(arg.clone())), Box::new(r#type));
+                r#type = Type::Fun(Box::new(Type::Algebraic(cast!(self.namespace.0.get(arg).unwrap(), Name::Adt).clone())), Box::new(r#type));
             }
 
             self.env.insert(con.name.clone(), Scheme(vec![], r#type));
@@ -400,7 +403,7 @@ impl TIState {
 
         assert!(self
             .namespace
-            .insert(def.name.clone(), Name::Type(def))
+            .insert(def.name.clone(), Name::Adt(def))
             .is_none());
 
         Ok(())
@@ -471,7 +474,7 @@ impl TIState {
                     fun_ty.apply(&s);
 
                     let s_ = self.unify(&return_ty, &ty).map_err(|err| {
-                        report.add_label(Label::new(body.span()).with_message(err.to_string()));
+                        report.add_label(Label::new(body.span().into()).with_message(err.to_string()));
                     })?;
 
                     fun_ty.apply(&s_);
@@ -518,7 +521,7 @@ impl Namespace {
         name: &str,
         span: Range<usize>,
         report: &mut ReportBuilder<Range<usize>>,
-    ) -> Result<Option<(usize, &Rc<ADT>)>, ()> {
+    ) -> Result<Option<(usize, &Rc<Adt>)>, ()> {
         match self.0.get(name.deref()) {
             Some(obj) => match obj {
                 Name::Constructor { idx, r#type } => Ok(Some((*idx, r#type))),
@@ -528,7 +531,7 @@ impl Namespace {
                     );
                     Err(())
                 }
-                Name::Type(_) => {
+                Name::Adt(_) => {
                     report.add_label(
                         Label::new(span).with_message("expected constructor found type"),
                     );

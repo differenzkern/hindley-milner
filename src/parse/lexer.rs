@@ -1,57 +1,8 @@
-use chumsky::{
-    error::Cheap,
-    prelude::*,
-    text::{newline, Character},
-    Error, Stream,
-};
-use std::{
-    fmt::Display,
-    ops::{Deref, Range},
-};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Span {
-    start: usize,
-    end: usize,
-}
+use chumsky::{prelude::*, text::newline};
+use std::{fmt::Display, ops::Range};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Spanned<T>(T, Span);
-
-impl<T> Deref for Spanned<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T> std::ops::DerefMut for Spanned<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<T> Spanned<T> {
-    fn span(&self) -> Span {
-        self.1
-    }
-}
-
-impl Into<Span> for std::ops::Range<usize> {
-    fn into(self) -> Span {
-        Span {
-            start: self.start,
-            end: self.end,
-        }
-    }
-}
-
-impl Into<std::ops::Range<usize>> for Span {
-    fn into(self) -> std::ops::Range<usize> {
-        self.start..self.end
-    }
-}
+pub struct Spanned<T>(pub T, pub std::ops::Range<usize>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 
@@ -66,7 +17,7 @@ pub enum Token {
     Num(String),
     Let,
     In,
-    Indent(usize),
+    EOF
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -75,6 +26,17 @@ pub enum Op {
     Plus,
     Minus,
     Mult,
+}
+
+impl Display for Op {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Op::Pipeline => "|>".fmt(f),
+            Op::Plus => "+".fmt(f),
+            Op::Minus => "-".fmt(f),
+            Op::Mult => "*".fmt(f),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -95,11 +57,8 @@ impl Display for Token {
             Token::Let => "let".fmt(f),
             Token::In => "in".fmt(f),
             Token::Type(ident) => ident.fmt(f),
-            Token::Op(_) => todo!(),
-            Token::Indent(level) => {
-                "\n".fmt(f)?;
-                " ".repeat(*level).fmt(f)
-            }
+            Token::EOF => "EOF".fmt(f),
+            Token::Op(op) => op.fmt(f),
         }
     }
 }
@@ -153,51 +112,31 @@ pub fn variable_identifier() -> impl Parser<char, Token, Error = Simple<char>> {
 }
 
 pub fn ctrl() -> impl Parser<char, Token, Error = Simple<char>> {
-    one_of("|()=λ.→_><[]{}").map(Token::Ctrl)
+    one_of("|()=λ.→_><[]{}\n\r").map(Token::Ctrl)
 }
 
 pub fn constants() -> impl Parser<char, Token, Error = Simple<char>> {
     text::int(10).map(Token::Num)
 }
 
-pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
+pub fn lexer() -> impl Parser<char, Vec<(Token, Range<usize>)>, Error = Simple<char>> {
     let single_token = constants()
         .or(ops())
         .or(ctrl())
         .or(keywords())
         .or(type_identifier())
         .or(variable_identifier())
-        .map_with_span(|token, span| Spanned(token, span.into()));
-
-    let test = [
-        ("fun", Token::Function),
-        ("type", Token::Adt),
-        ("=", Token::Ctrl('=')),
-        ("match", Token::Match),
-        ("in", Token::In),
-        ("let", Token::Let),
-        ("Bool", Token::Type("Bool".to_string())),
-        ("x", Token::Ident("x".to_string())),
-    ];
-
-    for (test, exp) in test {
-        assert_eq!(single_token.parse(test).unwrap().0, exp);
-    }
+        .map_with_span(|token, span| (token, span));
 
     let line_ws = filter::<_, _, Simple<char>>(|c: &char| *c == ' ' || *c == '\t');
 
-    let line = line_ws
-        .ignored()
-        .repeated()
-        .map_with_span(|ws, span| Spanned(Token::Indent(ws.len()), span.into()))
-        .chain(
-            single_token
-                .separated_by(line_ws)
-        ).then_ignore(end().or(newline()));
+    /*let line = single_token.padded_by(line_ws).repeated().chain(
+        newline()
+            .or(end())
+            .map_with_span(|_, span: Range<usize>| (Token::Ctrl('\n'), span)),
+    );*/
 
-    recursive(|lines| {
-        end()
-            .map(|()| vec![])
-            .or(line.chain(end().map(|()| vec![]).or(lines)))
-    })
+    //line.padded_by(text::whitespace()).repeated().flatten()
+
+    single_token.padded_by(line_ws.repeated()).repeated().chain(end().map_with_span(|end, span: Range<usize>| (Token::EOF, span.into())))
 }

@@ -1,5 +1,27 @@
 type Bool = True | False
-λx.match x | True → False | False → True
 
-fun neg_curried = λx. match x | True → False | False → True
-fun neg_uncurried x = match x | True → False | False → True
+fun neg x = match x {
+  | True → False
+  | False → True
+}
+
+fun or x y = match x {
+  | True → True
+  | False → y
+}
+
+fun and x y = match x {
+  | True → y
+  | False → False
+}
+
+fun xor x y = match x {
+  | True → neg y
+  | False → y
+}
+
+fun if x a b = match x {
+  | True → a
+  | False → b
+}
+
