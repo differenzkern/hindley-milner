@@ -1,8 +1,6 @@
-use chumsky::{prelude::*, text::newline};
+use chumsky::prelude::*;
 use std::{fmt::Display, ops::Range};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Spanned<T>(pub T, pub std::ops::Range<usize>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 

@@ -1,4 +1,5 @@
 type Bool = True | False
+type Nat = Z | S Nat
 
 fun neg x = match x {
   | True → False
@@ -16,7 +17,10 @@ fun and x y = match x {
 }
 
 fun xor x y = match x {
-  | True → neg y
+  | True → match y {
+    | False → True
+    | True → False
+  }
   | False → y
 }
 

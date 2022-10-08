@@ -2,13 +2,13 @@ use std::{rc::Rc, ops::Deref, fmt::Display};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Toplevel {
-    Adt(Adt),
-    Fun(Function),
-    Expr(Spanned<Expr>),
+    Adt(AdtDef),
+    Fun(FunctionDef),
+    Expr(Spanned<Ast>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Adt {
+pub struct AdtDef {
     pub name: Rc<str>,
     pub constructors: Vec<Constructor>,
 }
@@ -20,19 +20,19 @@ pub struct Constructor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Function {
+pub struct FunctionDef {
     pub name: Rc<str>,
     pub arguments: Vec<Rc<str>>,
-    pub body: Rc<Spanned<Expr>>,
+    pub body: Rc<Spanned<Ast>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expr {
+pub enum Ast {
     Var(Rc<str>),
-    App(Rc<Spanned<Expr>>, Rc<Spanned<Expr>>),
-    Abs(Rc<str>, Rc<Spanned<Expr>>),
+    App(Rc<Spanned<Ast>>, Rc<Spanned<Ast>>),
+    Abs(Rc<str>, Rc<Spanned<Ast>>),
     Lit(Literal),
-    Let(Rc<str>, Rc<Spanned<Expr>>, Rc<Spanned<Expr>>),
+    Let(Rc<str>, Rc<Spanned<Ast>>, Rc<Spanned<Ast>>),
     Match(Spanned<Rc<str>>, Vec<Spanned<Clause>>),
 }
 
@@ -41,7 +41,7 @@ pub enum Expr {
 pub struct Clause {
     pub constructor: Spanned<Rc<str>>,
     pub variables: Vec<Spanned<Rc<str>>>,
-    pub expr: Rc<Spanned<Expr>>,
+    pub expr: Rc<Spanned<Ast>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,32 +124,32 @@ impl Into<std::ops::Range<usize>> for Span {
     }
 }
 
-impl Display for Expr {
+impl Display for Ast {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fn fmt_parens(this: &Expr, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn fmt_parens(this: &Ast, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match this {
-                this @ Expr::App(_, _) => write!(f, "({this})"),
-                Expr::Abs(_, _) => write!(f, "({this})"),
-                Expr::Let(_, _, _) => write!(f, "({this})"),
+                this @ Ast::App(_, _) => write!(f, "({this})"),
+                Ast::Abs(_, _) => write!(f, "({this})"),
+                Ast::Let(_, _, _) => write!(f, "({this})"),
                 _ => this.fmt(f),
             }
         }
 
         match self {
-            Expr::Var(name) => write!(f, "{name}"),
-            Expr::App(e1, e2) => {
+            Ast::Var(name) => write!(f, "{name}"),
+            Ast::App(e1, e2) => {
                 write!(f, "{e1} ")?;
                 fmt_parens(e2, f)
             }
-            Expr::Abs(x, e) => {
+            Ast::Abs(x, e) => {
                 write!(f, "λ{x}.")?;
                 fmt_parens(e, f)
             }
-            Expr::Lit(lit) => write!(f, "{lit}"),
-            Expr::Let(x, e1, e2) => {
+            Ast::Lit(lit) => write!(f, "{lit}"),
+            Ast::Let(x, e1, e2) => {
                 write!(f, "let {x} = {e1} in {e2}")
             }
-            Expr::Match(x, clauses) => {
+            Ast::Match(x, clauses) => {
                 write!(f, "match {x}")?;
                 for clause in clauses {
                     write!(f, "{clause}")?;

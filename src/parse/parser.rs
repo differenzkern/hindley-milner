@@ -4,7 +4,7 @@ use std::rc::Rc;
 use ariadne::{Report, ReportKind, Label, Color, Fmt, Source};
 use chumsky::{prelude::*, Stream};
 
-use super::ast::{Expr, Spanned, Toplevel, Clause, Literal, Function, Constructor, Adt};
+use super::ast::{Ast, Spanned, Toplevel, Clause, Literal, FunctionDef, Constructor, AdtDef};
 
 use super::lexer::{Token, lexer};
 
@@ -110,7 +110,7 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
             .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')));
 
         let val = select! {
-            Token::Num(n) => Expr::Lit(Literal::Num(n.parse::<u64>().unwrap()))
+            Token::Num(n) => Ast::Lit(Literal::Num(n.parse::<u64>().unwrap()))
         };
 
         let ident = select! { Token::Ident(ident) => ident, Token::Type(ident) => ident };
@@ -123,13 +123,13 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
             .then(expr.clone())
             .then_ignore(just(Token::In))
             .then(expr.clone())
-            .map(|((name, val), expr)| Expr::Let(Rc::from(name), Rc::new(val), Rc::new(expr)));
+            .map(|((name, val), expr)| Ast::Let(Rc::from(name), Rc::new(val), Rc::new(expr)));
 
         let lambda = just(Token::Ctrl('λ'))
             .ignore_then(ident)
             .then_ignore(just(Token::Ctrl('.')))
             .then(expr.clone())
-            .map(|(a, b)| Expr::Abs(Rc::from(a), Rc::new(b)));
+            .map(|(a, b)| Ast::Abs(Rc::from(a), Rc::new(b)));
 
         let clause = just(Token::Ctrl('|'))
             .ignore_then(ident.map(Rc::from).map_with_span(|ident, span: Range<usize>|Spanned(ident, span.into())))
@@ -150,20 +150,20 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
         let r#match = just(Token::Match)
             .ignore_then(spanned_ident)
             .then(clause.padded_by(just(Token::Ctrl('\n')).repeated()).repeated().delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}'))))
-            .map(|(variable, clauses)| Expr::Match(variable, clauses));
+            .map(|(variable, clauses)| Ast::Match(variable, clauses));
 
         let atom = brackets.or(val
             .or(r#let)
             .or(lambda)
             .or(r#match)
-            .or(ident.map(Rc::from).map(Expr::Var))
+            .or(ident.map(Rc::from).map(Ast::Var))
             .map_with_span(|ident, span: Range<usize>|Spanned(ident, span.into())));
 
         atom.clone().then(atom.repeated()).map(|(atom, rem)| {
             rem.into_iter().fold(atom, |left, right| {
                 let span = left.1.start..right.1.end;
 
-                Spanned(Expr::App(Rc::new(left), Rc::new(right)), span.into())
+                Spanned(Ast::App(Rc::new(left), Rc::new(right)), span.into())
             })
         })
     });
@@ -176,7 +176,7 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
         .then_ignore(just(Token::Ctrl('=')))
         .then(expr.clone().map(Rc::from))
         .map(|((name, arguments), body)| {
-            Toplevel::Fun(Function {
+            Toplevel::Fun(FunctionDef {
                 name,
                 arguments,
                 body,
@@ -192,7 +192,7 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
         .ignore_then(ident.map(Rc::from))
         .then_ignore(just(Token::Ctrl('=')))
         .then(constructor.separated_by(just(Token::Ctrl('|'))))
-        .map(|(name, constructors)| Toplevel::Adt(Adt { name, constructors }));
+        .map(|(name, constructors)| Toplevel::Adt(AdtDef { name, constructors }));
 
     function.or(adt).or(expr.clone().map(Toplevel::Expr))
 }
