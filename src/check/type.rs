@@ -1,6 +1,9 @@
 use std::collections::HashMap as Map;
 
-use super::{exp::AdtRef, check::{Subst, Types}};
+use super::{
+    check::{Subst, Types},
+    exp::AdtRef,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scheme(pub Vec<TypeVar>, pub Box<Type>);
@@ -10,7 +13,7 @@ pub struct TypeVar(usize);
 
 impl std::fmt::Display for TypeVar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "'{self}")
+        write!(f, "'{}", self.0)
     }
 }
 
@@ -20,7 +23,7 @@ pub enum Type {
     Var(TypeVar),
     Lam(Box<Type>, Box<Type>),
     Adt(AdtRef),
-    Prim(PrimType)
+    Prim(PrimType),
 }
 
 impl std::fmt::Display for Type {
@@ -38,7 +41,7 @@ impl std::fmt::Display for Type {
                 }
 
                 scheme.1.fmt(f)
-            },
+            }
             Type::Var(TypeVar(var)) => write!(f, "'{var}"),
             Type::Lam(ty1, ty2) => write!(f, "{ty1} → {ty2}"),
             Type::Adt(adt) => write!(f, "{adt:?}"),
@@ -49,7 +52,7 @@ impl std::fmt::Display for Type {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrimType {
-    Int
+    Int,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -1,4 +1,4 @@
-use std::{rc::Rc, ops::Deref, fmt::Display};
+use std::{fmt::Display, ops::Deref, rc::Rc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Toplevel {
@@ -63,13 +63,11 @@ impl chumsky::span::Span for Span {
     fn new(_: Self::Context, range: std::ops::Range<Self::Offset>) -> Self {
         Self {
             start: range.start,
-            end: range.end
+            end: range.end,
         }
     }
 
-    fn context(&self) -> Self::Context {
-        ()
-    }
+    fn context(&self) -> Self::Context {}
 
     fn start(&self) -> Self::Offset {
         self.start
@@ -109,18 +107,18 @@ impl<T> Spanned<T> {
     }
 }
 
-impl Into<Span> for std::ops::Range<usize> {
-    fn into(self) -> Span {
+impl From<std::ops::Range<usize>> for Span {
+    fn from(range: std::ops::Range<usize>) -> Self {
         Span {
-            start: self.start,
-            end: self.end,
+            start: range.start,
+            end: range.end,
         }
     }
 }
 
-impl Into<std::ops::Range<usize>> for Span {
-    fn into(self) -> std::ops::Range<usize> {
-        self.start..self.end
+impl From<Span> for std::ops::Range<usize> {
+    fn from(span: Span) -> Self {
+        span.start..span.end
     }
 }
 

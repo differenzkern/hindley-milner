@@ -1,16 +1,14 @@
-
-pub mod TypeCtxImpl {
+pub mod type_ctx_impl {
     use std::{
         collections::{HashMap as Map, HashSet as Set},
         fmt::Display,
         rc::Rc,
     };
-    
+
     use super::super::{
         check::{Subst, Types},
         r#type::{Scheme, Type, TypeVar},
     };
-    
 
     #[derive(Debug, Clone, Default)]
     pub struct TypeCtx {
@@ -108,19 +106,18 @@ pub mod TypeCtxImpl {
     }
 }
 
-pub use TypeCtxImpl::TypeCtx;
+pub use type_ctx_impl::TypeCtx;
 
-pub mod LetBindingsImpl {
+pub mod let_bindings_impl {
     use std::{collections::HashMap as Map, rc::Rc};
 
     use crate::check::exp::Expr;
-
 
     #[derive(Debug, Clone, Default)]
     pub struct LetBindings {
         map: Map<Rc<str>, Box<Expr>>,
 
-        undo_stack: Vec<UndoAction>
+        undo_stack: Vec<UndoAction>,
     }
 
     impl LetBindings {
@@ -130,10 +127,10 @@ pub mod LetBindingsImpl {
             match self.map.insert(name.clone(), expr) {
                 Some(expr) => {
                     self.undo_stack.push(UndoAction::Insert(name, expr));
-                },
+                }
                 None => {
                     self.undo_stack.push(UndoAction::Remove(name));
-                },
+                }
             }
 
             Savepoint(savepoint)
@@ -143,19 +140,19 @@ pub mod LetBindingsImpl {
             while self.undo_stack.len() > savepoint.0 {
                 if let Some(action) = self.undo_stack.pop() {
                     match action {
-                        UndoAction::Remove(name) => { self.map.remove(&name); },
-                        UndoAction::Insert(name, expr) => { self.map.insert(name, expr); },
+                        UndoAction::Remove(name) => {
+                            self.map.remove(&name);
+                        }
+                        UndoAction::Insert(name, expr) => {
+                            self.map.insert(name, expr);
+                        }
                     }
                 }
             }
         }
 
-        pub fn get(&self, name: &str, level: usize) -> Option<Box<Expr>> {
-            if let Some(expr) = self.map.get(name) {
-                Some(expr.clone())
-            } else {
-                None
-            }
+        pub fn get(&self, name: &str) -> Option<Box<Expr>> {
+            self.map.get(name).map(Clone::clone)
         }
     }
 
@@ -164,8 +161,8 @@ pub mod LetBindingsImpl {
     #[derive(Debug, Clone)]
     enum UndoAction {
         Remove(Rc<str>),
-        Insert(Rc<str>, Box<Expr>)
+        Insert(Rc<str>, Box<Expr>),
     }
 }
 
-pub use LetBindingsImpl::LetBindings;
+pub use let_bindings_impl::LetBindings;

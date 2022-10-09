@@ -4,24 +4,8 @@ use ariadne::Source;
 use check::check::TIState;
 use parse::ast::Toplevel;
 
-
-pub mod parse;
 pub mod check;
-
-#[macro_export]
-macro_rules! cast {
-    ($target: expr, $pat: path) => {
-        {
-            if let $pat(a) = $target { // #1
-                a
-            } else {
-                panic!(
-                    "mismatch variant when cast to {}", 
-                    stringify!($pat)); // #2
-            }
-        }
-    };
-}
+pub mod parse;
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -33,7 +17,6 @@ fn main() -> std::io::Result<()> {
     }
 
     let input = std::fs::read_to_string(&args.get(1).unwrap()).unwrap();
-
 
     let toplevel = self::parse::parser::parse(input.as_str());
 
@@ -63,4 +46,3 @@ fn main() -> std::io::Result<()> {
 
     Ok(())
 }
-

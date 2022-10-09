@@ -1,18 +1,18 @@
 use std::{
     collections::{HashMap as Map, HashSet as Set},
     fmt::Display,
-    ops::{Deref, Range},
+    ops::Deref,
     rc::Rc,
 };
 
-use ariadne::{Label, Report, ReportBuilder, ReportKind};
+use ariadne::{Label, Report, ReportKind};
 
+use crate::parse::ast::Span;
 use crate::parse::ast::{AdtDef, Ast, Clause, FunctionDef, Literal, Spanned};
-use crate::{cast, parse::ast::Span};
 
 use super::{
     context::{LetBindings, TypeCtx},
-    exp::{Cons, ConsRef, Env, Expr, Name},
+    exp::{Cons, ConsRef, Env, Expr},
     r#type::{Fresh, PrimType, Scheme, Type, TypeVar},
 };
 
@@ -161,7 +161,7 @@ impl TIState {
         let savepoint = self.ctx.savepoint();
 
         let res = || -> Result<(Subst, Expr, Type), Report> {
-            let span = exp.deref().1.clone();
+            let span = exp.deref().span();
 
             match exp.deref().deref() {
                 Ast::Var(n) => self.ti_var(n, span),
@@ -180,11 +180,10 @@ impl TIState {
         res
     }
 
-
     fn ti_var(&mut self, name: &Rc<str>, span: Span) -> Result<(Subst, Expr, Type), Report> {
         let expr = match self.locals.get(name) {
             Some(idx) => Expr::DeBrujinIdx(idx as i64),
-            None => match self.lets.get(name, self.locals.level) {
+            None => match self.lets.get(name) {
                 Some(r#let) => *r#let,
                 None => match self.env.lookup_curried_cons(name) {
                     Ok(exp) => *exp,
@@ -211,13 +210,14 @@ impl TIState {
         &mut self,
         name: &Rc<str>,
         e: &Rc<Spanned<Ast>>,
-        span: Span,
+        _: Span,
     ) -> Result<(Subst, Expr, Type), Report> {
         let mut tv = Type::Var(self.fresh.new_type_var());
         self.ctx
             .insert(name.to_owned(), Scheme(vec![], Box::new(tv.clone())));
 
-        let savepoint = self.locals.push(name.clone());
+        let savepoint = self.locals.savepoint();
+        self.locals.push(name.clone());
 
         self.level += 1;
         let (s1, e, t1) = self.ti(e)?;
@@ -240,7 +240,7 @@ impl TIState {
         &mut self,
         e1: &Rc<Spanned<Ast>>,
         e2: &Rc<Spanned<Ast>>,
-        span: Span,
+        _: Span,
     ) -> Result<(Subst, Expr, Type), Report> {
         let mut tv = Type::Var(self.fresh.new_type_var());
 
@@ -273,17 +273,15 @@ impl TIState {
         x: &Rc<str>,
         e1: &Rc<Spanned<Ast>>,
         e2: &Rc<Spanned<Ast>>,
-        span: Span,
+        _: Span,
     ) -> Result<(Subst, Expr, Type), Report> {
         let (s1, mut e1, t1) = self.ti(e1)?;
 
         e1.convert_idx_to_lvl(self.level, 0);
 
-        let t_ = {
-            let mut env = self.ctx.clone();
-            env.apply(&s1);
-            env.generalize(&t1)
-        };
+        self.ctx.apply(&s1);
+
+        let t_ = self.ctx.generalize(&t1);
 
         self.ctx.insert(x.to_owned(), t_);
         self.ctx.apply(&s1);
@@ -301,44 +299,24 @@ impl TIState {
         &mut self,
         name: &Spanned<Rc<str>>,
         arms: &Vec<Spanned<Clause>>,
-        span: Span,
+        _: Span,
     ) -> Result<(Subst, Expr, Type), Report> {
-        let savepoint = self.ctx.savepoint();
-
         let (mut s, expr, mut input_ty) = self.ti_var(&name.0, name.span())?;
 
-        let mut output_ty_var = self.fresh.new_type_var();
+        let output_ty_var = self.fresh.new_type_var();
         let mut output_ty = Type::Var(output_ty_var);
 
+        self.ctx.remove(name);
 
         let mut ti_arms = std::iter::repeat_with(|| None)
             .take(arms.len())
             .collect::<Vec<_>>();
 
         for clause in arms {
-            let (s_, clause_idx, expr, ty_) =
-                self.ti_match_arm(&mut output_ty, output_ty_var, &mut input_ty, clause).map_err(|err| {
-                    self.ctx.restore(savepoint);
-                    err
-                })?;
+            let (s_, clause_idx, expr) =
+                self.ti_match_arm(&mut input_ty, &mut output_ty, clause)?;
 
             ti_arms[clause_idx] = Some(expr);
-
-            self.ctx.apply(&s_);
-            input_ty.apply(&s_);
-
-            s = s_.compose(&s);
-
-            let s_ = self.unify(&output_ty, &ty_).map_err(|err| {
-                self.ctx.restore(savepoint);
-                Report::build(ReportKind::Error, (), 0)
-                    .with_message(format!("failed to unify match arms: {err}"))
-                    .with_label(
-                        Label::new(clause.span().into())
-                            .with_message("failed to unify this match arm with the previous"),
-                    )
-                    .finish()
-            })?;
 
             self.ctx.apply(&s_);
             input_ty.apply(&s_);
@@ -350,19 +328,15 @@ impl TIState {
 
         output_ty.apply(&s);
 
-        self.ctx.restore(savepoint);
-
         Ok((s, Expr::Match(Box::new(expr), ti_arms), output_ty))
     }
-
 
     fn ti_match_arm(
         &mut self,
         input: &mut Type,
-        var: TypeVar,
         output: &mut Type,
         clause: &Clause,
-    ) -> Result<(Subst, usize, Expr, Type), Report> {
+    ) -> Result<(Subst, usize, Expr), Report> {
         let cons_ref = self
             .env
             .lookup_cons(clause.constructor.0.as_ref())
@@ -373,12 +347,6 @@ impl TIState {
                     )
                     .finish()
             })?;
-
-        let s = self.unify(input, &Type::Adt(cons_ref.0))
-            .map_err(|err| Report::build(ReportKind::Error, (), 0)
-            .with_message("failed to unify match arms").finish())?;
-        self.ctx.apply(&s);
-
 
         let cons = self.env.deref_cons(cons_ref);
         if cons.arguments().len() != clause.variables.len() {
@@ -394,25 +362,25 @@ impl TIState {
                 .finish());
         }
 
-        let mut r#type = Type::Var(var);
-        let mut expr = clause.expr.clone();
+        let expr = clause.expr.clone();
 
-        for (ty, arg) in cons.arguments().iter().zip(clause.variables.iter()).rev() {
-            r#type = Type::Lam(Box::new(Type::Adt(*ty)), Box::new(r#type));
-            let span = Span {
-                start: arg.span().start,
-                end: expr.span().end,
-            };
+        let savepoint = self.locals.savepoint();
 
-            expr = Rc::new(Spanned(Ast::Abs(arg.0.clone(), expr), span));
+        for (ty, arg) in cons.arguments().iter().zip(clause.variables.iter()) {
+            self.ctx
+                .insert(arg.0.clone(), Scheme(vec![], Box::new(Type::Adt(*ty))));
+            self.locals.push(arg.0.clone());
         }
 
-        let (s_, expr, ty) = self.ti(&expr)?;
-        self.ctx.apply(&s_);
-        s.compose(&s_);
-        input.apply(&s_);
+        let (s__, expr, ty) = self.ti(&expr).map_err(|err| {
+            self.locals.restore(savepoint);
+            err
+        })?;
+        self.ctx.apply(&s__);
+        output.apply(&s__);
 
-        let s_ = self.unify(&ty, &r#type).map_err(|err| {
+        let s_ = self.unify(&ty, output).map_err(|err| {
+            self.locals.restore(savepoint);
             Report::build(ReportKind::Error, (), 0)
                 .with_message(format!(
                     "failed to unify match arms with matched variable: {err}"
@@ -423,9 +391,20 @@ impl TIState {
                 .finish()
         })?;
 
+        self.ctx.apply(&s_);
+        output.apply(&s_);
         input.apply(&s_);
 
-        Ok((s.compose(&s_), cons_ref.1, expr, r#type))
+        let s = self.unify(input, &Type::Adt(cons_ref.0)).map_err(|err| {
+            self.locals.restore(savepoint);
+            Report::build(ReportKind::Error, (), 0)
+                .with_message(err.to_string())
+                .finish()
+        })?;
+        input.apply(&s);
+        self.ctx.apply(&s);
+
+        Ok((s__.compose(&s_.compose(&s)), cons_ref.1, expr))
     }
 
     pub fn check_adt(&mut self, def: AdtDef) -> Result<(), Report> {
@@ -440,7 +419,7 @@ impl TIState {
 
         names.insert(def.name.clone());
 
-        for (idx, con) in def.constructors.iter().enumerate() {
+        for con in def.constructors.iter() {
             if !names.insert(con.name.clone()) || !self.env.is_fresh(&con.name) {
                 let report = Report::build(ReportKind::Error, (), 0)
                     .with_message(format!("identifier {} already taken", def.name))
@@ -499,7 +478,7 @@ impl TIState {
         let savepoint = self.ctx.savepoint();
 
         let res = || -> Result<Type, Report> {
-            let (subst, exp, mut ty) = self.ti(expr)?;
+            let (subst, _, mut ty) = self.ti(expr)?;
             ty.apply(&subst);
             Ok(ty)
         }();
@@ -519,7 +498,7 @@ impl TIState {
         let mut r#type = Type::Var(self.fresh.new_type_var());
         let mut body = fun.body.clone();
 
-        for arg in &fun.arguments {
+        for arg in fun.arguments.iter().rev() {
             r#type = Type::Lam(
                 Box::new(Type::Var(self.fresh.new_type_var())),
                 Box::new(r#type),
@@ -529,7 +508,7 @@ impl TIState {
         }
 
         match self.ti(&body) {
-            Ok((s, expr, mut ty)) => {
+            Ok((s, _, mut ty)) => {
                 ty.apply(&s);
 
                 Ok(ty)
@@ -600,15 +579,17 @@ struct LocalNames {
 }
 
 impl LocalNames {
-    pub fn push(&mut self, name: Rc<str>) -> Savepoint {
+    pub fn push(&mut self, name: Rc<str>) {
         if let Some(lvl) = self.map.insert(name.clone(), self.level) {
             self.undo_stack.push(UndoAction::InsertName(name, lvl));
         } else {
             self.undo_stack.push(UndoAction::RemoveName(name));
         }
         self.level += 1;
+    }
 
-        Savepoint(self.undo_stack.len() - 1)
+    pub fn savepoint(&self) -> Savepoint {
+        Savepoint(self.undo_stack.len())
     }
 
     pub fn restore(&mut self, savepoint: Savepoint) {
@@ -626,26 +607,13 @@ impl LocalNames {
         }
     }
 
-    pub fn shadow(&mut self, name: &Rc<str>) -> Savepoint {
-        let savepoint = self.undo_stack.len();
-
-        if let Some(value) = self.map.remove(name) {
-            self.undo_stack
-                .push(UndoAction::InsertName(name.clone(), value));
-        }
-
-        Savepoint(savepoint)
-    }
-
     // get de brujin index
     pub fn get(&self, name: &str) -> Option<usize> {
-        match self.map.get(name).to_owned() {
-            Some(lvl) => Some(self.level - 1 - lvl),
-            None => None,
-        }
+        self.map.get(name).map(|lvl| self.level - 1 - *lvl)
     }
 }
 
+#[derive(Clone, Copy)]
 struct Savepoint(usize);
 
 #[derive(Debug, Clone)]
