@@ -1,115 +1,55 @@
-use std::fmt::Display;
+#![feature(iterator_try_collect)]
+use std::rc::Rc;
 
-use anyhow::Result;
+use ariadne::Source;
+use check::check::TIState;
+use parse::ast::Toplevel;
 
-use crate::check::typecheck;
-use crate::parser::parse;
+use crate::check::r#type::TypeEnv;
 
-mod check;
-mod eval;
-mod parser;
+pub mod check;
+pub mod parse;
 
-fn main() -> Result<()> {
-    let inputs = [
-        "λx.let y = x in y",
-        "(λx.x)(λy.y)",
-        "3",
-        "false",
-        "λx.λy.x",
-        "(λx.λy.x) false",
-        "(λx.x)(λy.y)true",
-    ];
+fn main() -> std::io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
 
-    for input in inputs {
-        let expr = parse(input)?;
-        let ty = typecheck(&expr)?;
-        let eval = eval::eval(expr.clone());
+    if args.len() != 2 {
+        println!("expected input file as argument");
 
-        println!("> {expr}\n{eval}: {ty}");
+        std::process::exit(-1);
+    }
+
+    let input = std::fs::read_to_string(&args.get(1).unwrap()).unwrap();
+
+    let toplevel = self::parse::parser::parse(input.as_str());
+
+    let mut ti = TIState::default();
+
+    for toplevel in toplevel {
+        if let Err(report) = match toplevel {
+            Toplevel::Adt(def) => ti.check_adt(def),
+            Toplevel::Fun(fun) => {
+                let name = fun.name.clone();
+
+                match ti.check_fun(fun) {
+                    Ok(ty) => {
+                        println!("{name}: {}", TypeEnv(ti.env(), &ty));
+                        Ok(())
+                    }
+                    Err(report) => Err(report),
+                }
+            }
+            Toplevel::Expr(expr) => match ti.check_exp(&Rc::new(expr)) {
+                Ok(ty) => {
+                    println!("{}", TypeEnv(ti.env(), &ty));
+                    Ok(())
+                }
+                Err(report) => Err(report),
+            },
+        } {
+            report.eprint(Source::from(&input))?;
+        }
     }
 
     Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expr {
-    Var(String),
-    App(Box<Expr>, Box<Expr>),
-    Abs(String, Box<Expr>),
-    Lit(Literal),
-    Let(String, Box<Expr>, Box<Expr>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Literal {
-    Num(u64),
-    Bool(bool),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Type {
-    Var(String),
-    Int,
-    Bool,
-    Fun(Box<Type>, Box<Type>),
-}
-
-impl Display for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fn fmt_parens(this: &Type, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            if let Type::Fun(_, _) = this {
-                write!(f, "({this})")
-            } else {
-                this.fmt(f)
-            }
-        }
-
-        match self {
-            Type::Var(n) => n.fmt(f),
-            Type::Int => "int".fmt(f),
-            Type::Bool => "bool".fmt(f),
-            Type::Fun(t, s) => {
-                fmt_parens(t, f)?;
-                write!(f, " → {s}")
-            }
-        }
-    }
-}
-
-impl Display for Expr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fn fmt_parens(this: &Expr, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match this {
-                this @ Expr::App(_, _) => write!(f, "({this})"),
-                Expr::Abs(_, _) => write!(f, "({this})"),
-                Expr::Let(_, _, _) => write!(f, "({this})"),
-                _ => this.fmt(f),
-            }
-        }
-
-        match self {
-            Expr::Var(name) => write!(f, "{name}"),
-            Expr::App(e1, e2) => {
-                write!(f, "{e1} ")?;
-                fmt_parens(e2, f)
-            }
-            Expr::Abs(x, e) => {
-                write!(f, "λ{x}.")?;
-                fmt_parens(e, f)
-            }
-            Expr::Lit(lit) => write!(f, "{lit}"),
-            Expr::Let(x, e1, e2) => {
-                write!(f, "let {x} = {e1} in {e2}")
-            }
-        }
-    }
-}
-
-impl Display for Literal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Literal::Num(x) => write!(f, "{x}"),
-            Literal::Bool(x) => write!(f, "{x}"),
-        }
-    }
 }
