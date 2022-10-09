@@ -13,8 +13,6 @@ pub fn parse(src: &str) -> Vec<Toplevel> {
 
     let (tokens, tokenize_errs) = lexer().parse_recovery(src);
 
-    dbg!(&tokens);
-
     let (toplevel, parse_errs) = spanned_parser()
         .padded_by(just(Token::Ctrl('\n')).repeated())
         .repeated()
@@ -23,9 +21,6 @@ pub fn parse(src: &str) -> Vec<Toplevel> {
             len..len,
             tokens.unwrap_or_default().into_iter(),
         ));
-
-    dbg!(&toplevel);
-    dbg!(&parse_errs);
 
     tokenize_errs
         .into_iter()

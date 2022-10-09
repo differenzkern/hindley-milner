@@ -13,7 +13,7 @@ use crate::parse::ast::{AdtDef, Ast, Clause, FunctionDef, Literal, Spanned};
 use super::{
     context::Ctx,
     exp::{Cons, ConsRef, Env, Expr, FunRef},
-    r#type::{Fresh, PrimType, Scheme, Type, TypeVar},
+    r#type::{Fresh, PrimType, Scheme, Type, TypeEnv, TypeVar},
 };
 
 pub trait Types {
@@ -117,6 +117,10 @@ impl Display for UnificationError {
 }
 
 impl TIState {
+    pub fn env(&self) -> &Env {
+        &self.env
+    }
+
     fn unify(&mut self, ty1: &Type, ty2: &Type) -> Result<Subst, UnificationError> {
         match (ty1, ty2) {
             (Type::Lam(l, r), Type::Lam(l_, r_)) => {
@@ -132,8 +136,8 @@ impl TIState {
             (Type::Var(u), t) | (t, Type::Var(u)) => self.var_bind(*u, t),
             (Type::Adt(n), Type::Adt(m)) if n == m => Ok(Subst::null()),
             (ty1, ty2) => Err(UnificationError::IncombatibleTypes(
-                format!("{ty1}"),
-                format!("{ty2}"),
+                format!("{}", TypeEnv(&self.env, &ty1)),
+                format!("{}", TypeEnv(&self.env, &ty2)),
             )),
         }
     }
@@ -146,7 +150,10 @@ impl TIState {
         }
 
         if ty.ftv().contains(&var) {
-            return Err(UnificationError::OccursIn(var, format!("{ty}")));
+            return Err(UnificationError::OccursIn(
+                var,
+                format!("{}", TypeEnv(&self.env, ty)),
+            ));
         }
 
         Ok(Subst::singleton(var, ty.clone()))
@@ -303,9 +310,19 @@ impl TIState {
             s = s_.compose(&s);
         }
 
-        let ti_arms = ti_arms.into_iter().map(|arms| arms.unwrap()).collect();
-
         output_ty.apply(&s);
+
+        let span = arms.first().unwrap().span().start..arms.last().unwrap().span().end;
+
+        let ti_arms = ti_arms
+            .into_iter()
+            .try_collect::<Vec<Expr>>()
+            .ok_or_else(|| {
+                Report::build(ReportKind::Error, (), 0)
+                    .with_label(Label::new(span))
+                    .with_message("not all cases covered")
+                    .finish()
+            })?;
 
         Ok((s, Expr::Match(Box::new(expr), ti_arms), output_ty))
     }
@@ -532,9 +549,9 @@ impl Display for Subst {
         let mut iter = self.0.iter();
 
         if let Some((key, value)) = iter.next() {
-            write!(f, "{key}: {value}")?;
+            write!(f, "{key}: {value:?}")?;
             for (key, value) in iter {
-                write!(f, ", {key}: {value}")?;
+                write!(f, ", {key}: {value:?}")?;
             }
         }
 
