@@ -1,8 +1,11 @@
+#![feature(iterator_try_collect)]
 use std::rc::Rc;
 
 use ariadne::Source;
 use check::check::TIState;
 use parse::ast::Toplevel;
+
+use crate::check::r#type::TypeEnv;
 
 pub mod check;
 pub mod parse;
@@ -25,16 +28,20 @@ fn main() -> std::io::Result<()> {
     for toplevel in toplevel {
         if let Err(report) = match toplevel {
             Toplevel::Adt(def) => ti.check_adt(def),
-            Toplevel::Fun(fun) => match ti.check_fun(fun) {
-                Ok(ty) => {
-                    println!("{ty:#?}");
-                    Ok(())
+            Toplevel::Fun(fun) => {
+                let name = fun.name.clone();
+
+                match ti.check_fun(fun) {
+                    Ok(ty) => {
+                        println!("{name}: {}", TypeEnv(ti.env(), &ty));
+                        Ok(())
+                    }
+                    Err(report) => Err(report),
                 }
-                Err(report) => Err(report),
-            },
+            }
             Toplevel::Expr(expr) => match ti.check_exp(&Rc::new(expr)) {
                 Ok(ty) => {
-                    println!("{ty:#?}");
+                    println!("{}", TypeEnv(ti.env(), &ty));
                     Ok(())
                 }
                 Err(report) => Err(report),

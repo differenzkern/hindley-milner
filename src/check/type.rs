@@ -2,7 +2,7 @@ use std::collections::HashMap as Map;
 
 use super::{
     check::{Subst, Types},
-    exp::AdtRef,
+    exp::{AdtRef, Env},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,9 +26,13 @@ pub enum Type {
     Prim(PrimType),
 }
 
-impl std::fmt::Display for Type {
+pub struct TypeEnv<'a>(pub &'a Env, pub &'a Type);
+
+impl std::fmt::Display for TypeEnv<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
+        let TypeEnv(env, ty) = self;
+
+        match ty {
             Type::Scheme(scheme) => {
                 if !scheme.0.is_empty() {
                     write!(f, "!")?;
@@ -40,11 +44,11 @@ impl std::fmt::Display for Type {
                     write!(f, ": ")?;
                 }
 
-                scheme.1.fmt(f)
+                TypeEnv(env, &scheme.1).fmt(f)
             }
             Type::Var(TypeVar(var)) => write!(f, "'{var}"),
-            Type::Lam(ty1, ty2) => write!(f, "{ty1} → {ty2}"),
-            Type::Adt(adt) => write!(f, "{adt:?}"),
+            Type::Lam(ty1, ty2) => write!(f, "{} → {}", TypeEnv(env, &*ty1), TypeEnv(env, &*ty2)),
+            Type::Adt(adt) =>  write!(f, "{}", env.get_adt(*adt).name),
             Type::Prim(_) => todo!(),
         }
     }
