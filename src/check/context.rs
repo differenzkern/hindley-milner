@@ -41,8 +41,7 @@ impl Ctx {
 
     pub fn insert_ty(&mut self, name: Rc<str>, scheme: Scheme) {
         if let Some(scheme) = self.types.insert(name.clone(), scheme) {
-            self.undo_stack
-                .push(UndoAction::ReplaceType(name, scheme));
+            self.undo_stack.push(UndoAction::ReplaceType(name, scheme));
         } else {
             self.undo_stack.push(UndoAction::InsertType(name));
         }
@@ -57,8 +56,7 @@ impl Ctx {
                 .push(UndoAction::ReplaceLocal(name.clone(), expr, true));
 
             if let Some(scheme) = self.types.insert(name.clone(), Scheme(vec![], ty)) {
-                self.undo_stack
-                    .push(UndoAction::ReplaceType(name.clone(), scheme));
+                self.undo_stack.push(UndoAction::ReplaceType(name, scheme));
             } else {
                 self.undo_stack.push(UndoAction::InsertType(name));
             }
@@ -67,8 +65,7 @@ impl Ctx {
                 .push(UndoAction::InsertLocal(name.clone(), true));
 
             if let Some(scheme) = self.types.insert(name.clone(), Scheme(vec![], ty)) {
-                self.undo_stack
-                    .push(UndoAction::ReplaceType(name.clone(), scheme));
+                self.undo_stack.push(UndoAction::ReplaceType(name, scheme));
             } else {
                 self.undo_stack.push(UndoAction::InsertType(name));
             }
@@ -88,7 +85,8 @@ impl Ctx {
                 self.undo_stack.push(UndoAction::InsertType(name));
             }
         } else {
-            self.undo_stack.push(UndoAction::InsertLocal(name.clone(), false));
+            self.undo_stack
+                .push(UndoAction::InsertLocal(name.clone(), false));
 
             if let Some(scheme) = self.types.insert(name.clone(), scheme) {
                 self.undo_stack.push(UndoAction::ReplaceType(name, scheme));
@@ -163,8 +161,9 @@ impl Types for Ctx {
 
         for action in self.undo_stack.iter_mut() {
             match action {
-                UndoAction::ReplaceType(_, scheme)
-                | UndoAction::RemoveType(_, scheme) => scheme.apply(s),
+                UndoAction::ReplaceType(_, scheme) | UndoAction::RemoveType(_, scheme) => {
+                    scheme.apply(s)
+                }
                 _ => {}
             }
         }

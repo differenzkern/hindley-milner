@@ -287,7 +287,6 @@ impl TIState {
         let output_ty_var = self.fresh.new_type_var();
         let mut output_ty = Type::Var(output_ty_var);
 
-
         let mut ti_arms = std::iter::repeat_with(|| None)
             .take(arms.len())
             .collect::<Vec<_>>();
@@ -393,7 +392,6 @@ impl TIState {
             this.ctx.apply(&s_);
             output.apply(&s_);
             input.apply(&s_);
-
 
             Ok((
                 s__.compose(&s_.compose(&s.compose(&s___))),
@@ -501,34 +499,28 @@ impl TIState {
 
         let savepoint_failure = self.ctx.save();
 
-
         self.ctx
             .insert_ty(fun.name.clone(), Scheme(vec![], Box::new(r#type)));
 
         let savepoint_success = self.ctx.save();
 
+        self.env
+            .fun_map
+            .insert(fun.name.clone(), FunRef(self.env.fun_map.len()));
 
-        self.env.fun_map.insert(fun.name.clone(), FunRef(self.env.fun_map.len()));
-
-        let res = match self.ti(&body) {
+        match self.ti(&body) {
             Ok((s, _, mut ty)) => {
                 ty.apply(&s);
-
                 self.ctx.restore(savepoint_success);
-
                 Ok(ty)
             }
             Err(err) => {
                 self.env.fun_map.remove(&fun.name);
                 self.ctx.restore(savepoint_failure);
 
-
                 Err(err)
-            } ,
-        };
-
-
-        res
+            }
+        }
     }
 }
 
