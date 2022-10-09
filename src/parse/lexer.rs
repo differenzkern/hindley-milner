@@ -1,7 +1,6 @@
 use chumsky::prelude::*;
 use std::{fmt::Display, ops::Range};
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 
 pub enum Token {
@@ -15,7 +14,7 @@ pub enum Token {
     Num(String),
     Let,
     In,
-    EOF
+    EOF,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -128,13 +127,8 @@ pub fn lexer() -> impl Parser<char, Vec<(Token, Range<usize>)>, Error = Simple<c
 
     let line_ws = filter::<_, _, Simple<char>>(|c: &char| *c == ' ' || *c == '\t');
 
-    /*let line = single_token.padded_by(line_ws).repeated().chain(
-        newline()
-            .or(end())
-            .map_with_span(|_, span: Range<usize>| (Token::Ctrl('\n'), span)),
-    );*/
-
-    //line.padded_by(text::whitespace()).repeated().flatten()
-
-    single_token.padded_by(line_ws.repeated()).repeated().chain(end().map_with_span(|end, span: Range<usize>| (Token::EOF, span.into())))
+    single_token
+        .padded_by(line_ws.repeated())
+        .repeated()
+        .chain(end().map_with_span(|_, span: Range<usize>| (Token::EOF, span)))
 }

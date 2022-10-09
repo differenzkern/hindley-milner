@@ -1,12 +1,12 @@
 use std::ops::Range;
 use std::rc::Rc;
 
-use ariadne::{Report, ReportKind, Label, Color, Fmt, Source};
+use ariadne::{Color, Fmt, Label, Report, ReportKind, Source};
 use chumsky::{prelude::*, Stream};
 
-use super::ast::{Ast, Spanned, Toplevel, Clause, Literal, FunctionDef, Constructor, AdtDef};
+use super::ast::{AdtDef, Ast, Clause, Constructor, FunctionDef, Literal, Spanned, Toplevel};
 
-use super::lexer::{Token, lexer};
+use super::lexer::{lexer, Token};
 
 pub fn parse(src: &str) -> Vec<Toplevel> {
     let len = src.chars().count();
@@ -101,8 +101,6 @@ pub fn parse(src: &str) -> Vec<Toplevel> {
     toplevel.unwrap_or_default()
 }
 
-
-
 fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
     let expr = recursive(|expr| {
         let brackets = expr
@@ -115,7 +113,9 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
 
         let ident = select! { Token::Ident(ident) => ident, Token::Type(ident) => ident };
 
-        let spanned_ident = ident.map(Rc::from).map_with_span(|ident, span: Range<usize>|Spanned(ident, span.into()));
+        let spanned_ident = ident
+            .map(Rc::from)
+            .map_with_span(|ident, span: Range<usize>| Spanned(ident, span.into()));
 
         let r#let = just(Token::Let)
             .ignore_then(ident)
@@ -132,8 +132,17 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
             .map(|(a, b)| Ast::Abs(Rc::from(a), Rc::new(b)));
 
         let clause = just(Token::Ctrl('|'))
-            .ignore_then(ident.map(Rc::from).map_with_span(|ident, span: Range<usize>|Spanned(ident, span.into())))
-            .then(ident.map(Rc::from).map_with_span(|ident,span: Range<usize>|Spanned(ident, span.into())).repeated())
+            .ignore_then(
+                ident
+                    .map(Rc::from)
+                    .map_with_span(|ident, span: Range<usize>| Spanned(ident, span.into())),
+            )
+            .then(
+                ident
+                    .map(Rc::from)
+                    .map_with_span(|ident, span: Range<usize>| Spanned(ident, span.into()))
+                    .repeated(),
+            )
             .then_ignore(just(Token::Ctrl('→')))
             .then(expr.clone())
             .map_with_span(|((constructor, variables), expr), span: Range<usize>| {
@@ -149,7 +158,12 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
 
         let r#match = just(Token::Match)
             .ignore_then(spanned_ident)
-            .then(clause.padded_by(just(Token::Ctrl('\n')).repeated()).repeated().delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}'))))
+            .then(
+                clause
+                    .padded_by(just(Token::Ctrl('\n')).repeated())
+                    .repeated()
+                    .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}'))),
+            )
             .map(|(variable, clauses)| Ast::Match(variable, clauses));
 
         let atom = brackets.or(val
@@ -157,7 +171,7 @@ fn spanned_parser() -> impl Parser<Token, Toplevel, Error = Simple<Token>> {
             .or(lambda)
             .or(r#match)
             .or(ident.map(Rc::from).map(Ast::Var))
-            .map_with_span(|ident, span: Range<usize>|Spanned(ident, span.into())));
+            .map_with_span(|ident, span: Range<usize>| Spanned(ident, span.into())));
 
         atom.clone().then(atom.repeated()).map(|(atom, rem)| {
             rem.into_iter().fold(atom, |left, right| {

@@ -1,26 +1,24 @@
+use std::collections::HashMap as Map;
 use std::rc::Rc;
-use std::collections::{HashMap as Map, HashSet as Set};
 
 use crate::parse::ast::{AdtDef, Constructor};
 
 use super::r#type::Type;
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConsRef(pub AdtRef, pub usize);
 
-impl Into<AdtRef> for ConsRef {
-    fn into(self) -> AdtRef {
-        self.0
+impl From<ConsRef> for AdtRef {
+    fn from(cons_ref: ConsRef) -> Self {
+        cons_ref.0
     }
 }
 
-impl Into<AdtRef> for &ConsRef {
-    fn into(self) -> AdtRef {
-        self.0
+impl From<&ConsRef> for AdtRef {
+    fn from(cons_ref: &ConsRef) -> Self {
+        cons_ref.0
     }
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FunRef(usize);
@@ -40,13 +38,15 @@ pub enum EnvError<'a> {
     SymbolNotFound(&'a str),
     NotAFunction { name: Rc<str> },
     NotAType { name: &'a str },
-    NotACons { name: &'a str}
+    NotACons { name: &'a str },
 }
 
 impl<'a> std::fmt::Display for EnvError<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EnvError::SymbolNotFound(name) => write!(f, "could not find symbol {name} in environment"),
+            EnvError::SymbolNotFound(name) => {
+                write!(f, "could not find symbol {name} in environment")
+            }
             EnvError::NotAFunction { name } => write!(f, "{name} is not a function"),
             EnvError::NotAType { name } => write!(f, "{name} is not a type"),
             EnvError::NotACons { name } => write!(f, "{name} is not a constructor"),
@@ -67,22 +67,24 @@ pub struct Env {
     pub curried_con_map: Map<Rc<str>, Box<Expr>>,
 }
 
-
 impl Env {
     pub fn get_function(&self, fref: FunRef) -> &(Expr, Type) {
         self.functions.get(fref.0).unwrap()
     }
 
     pub fn get_cons(&self, cref: ConsRef) -> &Constructor {
-        self.types.get(cref.0.0).unwrap().constructors.get(cref.1).unwrap()
+        self.types
+            .get(cref.0 .0)
+            .unwrap()
+            .constructors
+            .get(cref.1)
+            .unwrap()
     }
 
     pub fn get_adt(&self, adt_ref: AdtRef) -> &AdtDef {
         self.types.get(adt_ref.0).unwrap()
     }
 
-
-    
     pub fn lookup_cons<'a>(&self, name: &'a str) -> Result<ConsRef, EnvError<'a>> {
         match self.con_map.get(name) {
             Some(value) => Ok(*value),
@@ -96,7 +98,6 @@ impl Env {
             None => Err(EnvError::SymbolNotFound(name)),
         }
     }
-
 
     pub fn lookup_adt<'a>(&self, name: &'a str) -> Result<AdtRef, EnvError<'a>> {
         match self.adt_map.get(name) {
@@ -112,11 +113,16 @@ impl Env {
         }
     }
 
-    pub fn insert_function(&mut self, name: Rc<str>, expr: Expr, r#type: Type) -> Result<FunRef, ()> {
-        if !self.fun_map.contains_key(&name) {
+    pub fn insert_function(
+        &mut self,
+        name: Rc<str>,
+        expr: Expr,
+        r#type: Type,
+    ) -> Result<FunRef, ()> {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.fun_map.entry(name) {
             let idx = self.functions.len();
             self.functions.push((expr, r#type));
-            self.fun_map.insert(name, FunRef(idx));
+            e.insert(FunRef(idx));
 
             Ok(FunRef(idx))
         } else {
@@ -125,7 +131,7 @@ impl Env {
     }
 
     pub fn deref_cons(&self, cref: ConsRef) -> &Cons {
-        &self.adts[cref.0.0][cref.1]
+        &self.adts[cref.0 .0][cref.1]
     }
 
     pub fn insert_adt(&mut self, def: AdtDef) -> Result<AdtRef, ()> {
@@ -142,22 +148,31 @@ impl Env {
         let adt_ref = AdtRef(self.types.len());
         self.adt_map.insert(def.name.clone(), adt_ref);
 
-
         for (idx, con) in def.constructors.iter().enumerate() {
             let mut r#type = Type::Adt(adt_ref);
-            let mut expr = Expr::ConsApp(ConsRef(adt_ref, idx), (0usize..con.arguments.len()).rev().map(|idx| Expr::DeBrujinIdx(idx as i64)).collect());
+            let mut expr = Expr::ConsApp(
+                ConsRef(adt_ref, idx),
+                (0usize..con.arguments.len())
+                    .rev()
+                    .map(|idx| Expr::DeBrujinIdx(idx as i64))
+                    .collect(),
+            );
 
             for arg in con.arguments.iter().rev() {
                 if arg.as_ref() == def.name.as_ref() {
                     r#type = Type::Lam(Box::new(Type::Adt(adt_ref)), Box::new(r#type));
                 } else {
-                    r#type = Type::Lam(Box::new(Type::Adt(self.lookup_adt(arg.as_ref()).unwrap())), Box::new(r#type));
+                    r#type = Type::Lam(
+                        Box::new(Type::Adt(self.lookup_adt(arg.as_ref()).unwrap())),
+                        Box::new(r#type),
+                    );
                 }
                 expr = Expr::Lam(Box::new(expr));
             }
 
             self.con_map.insert(con.name.clone(), ConsRef(adt_ref, idx));
-            self.curried_con_map.insert(con.name.clone(),  Box::new(expr));
+            self.curried_con_map
+                .insert(con.name.clone(), Box::new(expr));
         }
 
         self.types.push(def);
@@ -178,7 +193,7 @@ pub enum Expr {
     DeBrujinLvl(i64),
     Lam(Box<Expr>),
     Match(Box<Expr>, Vec<Expr>),
-    Fun(FunRef)
+    Fun(FunRef),
 }
 
 impl Expr {
@@ -192,27 +207,37 @@ impl Expr {
             _ => {}
         }
     }*/
-   
+
     pub fn convert_idx_to_lvl(&mut self, level: i64, max_idx: i64) {
         match self {
-            Expr::App(e1, e2) => { e1.convert_idx_to_lvl(level, max_idx); e2.convert_idx_to_lvl(level, max_idx); },
-            Expr::ConsApp(e1, e2) => { e2.into_iter().map(|e| e.convert_idx_to_lvl(level, max_idx)); },
+            Expr::App(e1, e2) => {
+                e1.convert_idx_to_lvl(level, max_idx);
+                e2.convert_idx_to_lvl(level, max_idx);
+            }
+            Expr::ConsApp(_, e2) => {
+                e2.iter_mut()
+                    .for_each(|e| e.convert_idx_to_lvl(level, max_idx));
+            }
             Expr::DeBrujinIdx(idx) => {
                 if *idx >= max_idx {
                     *self = Expr::DeBrujinLvl(level - 1 - *idx);
                 }
-            },
-            Expr::Lam(e) => { e.convert_idx_to_lvl(level + 1, max_idx + 1); },
-            Expr::Match(e1, e2) => {e1.convert_idx_to_lvl(level, max_idx); e2.iter_mut().for_each(|e| e.convert_idx_to_lvl(level, max_idx)); },
+            }
+            Expr::Lam(e) => {
+                e.convert_idx_to_lvl(level + 1, max_idx + 1);
+            }
+            Expr::Match(e1, e2) => {
+                e1.convert_idx_to_lvl(level, max_idx);
+                e2.iter_mut()
+                    .for_each(|e| e.convert_idx_to_lvl(level, max_idx));
+            }
             _ => {}
         }
     }
-
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeBrujin(usize);
-
 
 #[derive(Debug, Clone)]
 pub struct Cons(pub ConsRef, pub Vec<AdtRef>);
