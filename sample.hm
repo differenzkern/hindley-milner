@@ -29,3 +29,26 @@ fun if x a b = match x {
   | False → b
 }
 
+fun add n m = match n {
+  | Z → m
+  | S n → S (add n m)
+}
+
+fun alpha a n = match a {
+   | Z → Z
+   | S a → match a {
+      | Z → S Z
+      | S a → n
+   }
+}
+
+fun phi a b c = match c {
+  | Z → add a b
+  | S c → match b {
+    | Z → alpha a c
+    | S b → phi a (phi a b (S c)) c 
+  }
+}
+
+λ z. (let id = λ x. x in (let a = id z in match z { | Z → a | S n → (id True) }))
+

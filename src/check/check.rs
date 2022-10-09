@@ -12,7 +12,7 @@ use crate::parse::ast::{AdtDef, Ast, Clause, FunctionDef, Literal, Spanned};
 
 use super::{
     context::{LetBindings, TypeCtx},
-    exp::{Cons, ConsRef, Env, Expr},
+    exp::{Cons, ConsRef, Env, Expr, FunRef},
     r#type::{Fresh, PrimType, Scheme, Type, TypeVar},
 };
 
@@ -95,9 +95,8 @@ pub struct TIState {
     fresh: Fresh,
     ctx: TypeCtx,
     env: Env,
-    level: i64,
 
-    // de bruijn levels
+    // track de bruijn levels
     locals: LocalNames,
     lets: LetBindings,
 }
@@ -189,14 +188,23 @@ impl TIState {
                     Ok(exp) => *exp,
                     Err(_) => match self.env.lookup_fun(name) {
                         Ok(fun) => Expr::Fun(fun),
-                        Err(_) => {
-                            return Err(Report::build(ReportKind::Error, (), 0)
-                                .with_label(
-                                    Label::new(span.into())
-                                        .with_message(format!("unbound variable {name}")),
-                                )
-                                .finish());
-                        }
+                        Err(_) => match self.ctx.get(name) {
+                            Some(scheme) => {
+                                return Ok((
+                                    Subst::null(),
+                                    Expr::Fun(FunRef(self.env.functions.len())),
+                                    self.fresh.instantiate(scheme),
+                                ));
+                            }
+                            None => {
+                                return Err(Report::build(ReportKind::Error, (), 0)
+                                    .with_label(
+                                        Label::new(span.into())
+                                            .with_message(format!("unbound variable {name}")),
+                                    )
+                                    .finish());
+                            }
+                        },
                     },
                 },
             },
@@ -219,11 +227,7 @@ impl TIState {
         let savepoint = self.locals.savepoint();
         self.locals.push(name.clone());
 
-        self.level += 1;
         let (s1, e, t1) = self.ti(e)?;
-        self.level -= 1;
-
-        //dbg!(format!("{s1}"));
 
         tv.apply(&s1);
 
@@ -277,7 +281,7 @@ impl TIState {
     ) -> Result<(Subst, Expr, Type), Report> {
         let (s1, mut e1, t1) = self.ti(e1)?;
 
-        e1.convert_idx_to_lvl(self.level, 0);
+        e1.convert_idx_to_lvl(self.locals.level() as i64, 0);
 
         self.ctx.apply(&s1);
 
@@ -348,15 +352,31 @@ impl TIState {
                     .finish()
             })?;
 
+        let s___ = self.unify(input, &Type::Adt(cons_ref.0)).map_err(|err| {
+            Report::build(ReportKind::Error, (), 0)
+                .with_message("failed to unify match variable with constructor in match arm")
+                .with_label(
+                    Label::new(clause.constructor.span().into()).with_message(err.to_string()),
+                )
+                .finish()
+        })?;
+
+        self.ctx.apply(&s___);
+
+        input.apply(&s___);
+
+
         let cons = self.env.deref_cons(cons_ref);
-        if cons.arguments().len() != clause.variables.len() {
+        let num_cons_args = cons.arguments().len();
+
+        if num_cons_args != clause.variables.len() {
             let span =
                 clause.variables[0].span().start..clause.variables.last().unwrap().span().end;
 
             return Err(Report::build(ReportKind::Error, (), 0)
                 .with_label(Label::new(span).with_message(format!(
                     "constructor takes {} arguments but {} arguments were given",
-                    cons.arguments().len(),
+                    num_cons_args,
                     clause.variables.len()
                 )))
                 .finish());
@@ -372,39 +392,41 @@ impl TIState {
             self.locals.push(arg.0.clone());
         }
 
-        let (s__, expr, ty) = self.ti(&expr).map_err(|err| {
-            self.locals.restore(savepoint);
-            err
-        })?;
-        self.ctx.apply(&s__);
-        output.apply(&s__);
 
-        let s_ = self.unify(&ty, output).map_err(|err| {
-            self.locals.restore(savepoint);
-            Report::build(ReportKind::Error, (), 0)
-                .with_message(format!(
-                    "failed to unify match arms with matched variable: {err}"
-                ))
-                .with_label(Label::new(
-                    clause.constructor.span().start..clause.constructor.span().start,
-                ))
-                .finish()
-        })?;
+        let res = |this: &mut Self| -> Result<(Subst, usize, Expr), Report> {
+            let (s__, expr, ty) = this.ti(&expr)?;
+            this.ctx.apply(&s__);
+            output.apply(&s__);
 
-        self.ctx.apply(&s_);
-        output.apply(&s_);
-        input.apply(&s_);
+            let s_ = this.unify(&ty, output).map_err(|err| {
+                Report::build(ReportKind::Error, (), 0)
+                    .with_message(format!(
+                        "failed to unify match arms with matched variable: {err}"
+                    ))
+                    .with_label(Label::new(
+                        clause.constructor.span().start..clause.constructor.span().start,
+                    ))
+                    .finish()
+            })?;
 
-        let s = self.unify(input, &Type::Adt(cons_ref.0)).map_err(|err| {
-            self.locals.restore(savepoint);
-            Report::build(ReportKind::Error, (), 0)
-                .with_message(err.to_string())
-                .finish()
-        })?;
-        input.apply(&s);
-        self.ctx.apply(&s);
+            this.ctx.apply(&s_);
+            output.apply(&s_);
+            input.apply(&s_);
 
-        Ok((s__.compose(&s_.compose(&s)), cons_ref.1, expr))
+            let s = this.unify(input, &Type::Adt(cons_ref.0)).map_err(|err| {
+                Report::build(ReportKind::Error, (), 0)
+                    .with_message(err.to_string())
+                    .finish()
+            })?;
+            input.apply(&s);
+            this.ctx.apply(&s);
+
+            Ok((s___.compose(&s__.compose(&s_.compose(&s))), cons_ref.1, expr))
+        }(self);
+
+        self.locals.restore(savepoint);
+
+        res
     }
 
     pub fn check_adt(&mut self, def: AdtDef) -> Result<(), Report> {
@@ -507,14 +529,18 @@ impl TIState {
             body = Rc::new(Spanned(Ast::Abs(arg.clone(), body), span));
         }
 
-        match self.ti(&body) {
+        self.ctx.insert(fun.name, Scheme(vec![], Box::new(r#type)));
+
+        let res = match self.ti(&body) {
             Ok((s, _, mut ty)) => {
                 ty.apply(&s);
 
                 Ok(ty)
             }
             Err(err) => Err(err),
-        }
+        };
+
+        res
     }
 }
 
@@ -579,6 +605,10 @@ struct LocalNames {
 }
 
 impl LocalNames {
+    pub fn level(&self) -> usize {
+        self.level
+    }
+
     pub fn push(&mut self, name: Rc<str>) {
         if let Some(lvl) = self.map.insert(name.clone(), self.level) {
             self.undo_stack.push(UndoAction::InsertName(name, lvl));
@@ -598,9 +628,11 @@ impl LocalNames {
                 match action {
                     UndoAction::RemoveName(name) => {
                         self.map.remove(&name);
+                        self.level -= 1;
                     }
                     UndoAction::InsertName(name, lvl) => {
                         self.map.insert(name, lvl);
+                        self.level -= 1;
                     }
                 }
             }

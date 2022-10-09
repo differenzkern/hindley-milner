@@ -21,7 +21,7 @@ impl From<&ConsRef> for AdtRef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FunRef(usize);
+pub struct FunRef(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdtRef(pub usize);
@@ -197,17 +197,6 @@ pub enum Expr {
 }
 
 impl Expr {
-    /*pub fn convert_lvl_to_idx(&mut self, level: i64) {
-        match self {
-            Expr::App(e1, e2) => { e1.convert_lvl_to_idx(level); e2.convert_lvl_to_idx(level); },
-            Expr::ConsApp(e1, e2) => { e2.into_iter().map(|e| e.convert_lvl_to_idx(level)); },
-            Expr::DeBrujinLvl(level_) => { *self = Expr::DeBrujinIdx(level - 1 - *level_); },
-            Expr::Lam(e) => { e.convert_lvl_to_idx(level); },
-            Expr::Match(e1, e2) => {e1.convert_lvl_to_idx(level); e2.iter_mut().for_each(|e| e.convert_lvl_to_idx(level)); },
-            _ => {}
-        }
-    }*/
-
     pub fn convert_idx_to_lvl(&mut self, level: i64, max_idx: i64) {
         match self {
             Expr::App(e1, e2) => {
