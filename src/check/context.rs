@@ -1,168 +1,172 @@
-pub mod type_ctx_impl {
-    use std::{
-        collections::{HashMap as Map, HashSet as Set},
-        fmt::Display,
-        rc::Rc,
-    };
+use std::collections::{HashMap as Map, HashSet as Set};
+use std::rc::Rc;
 
-    use super::super::{
-        check::{Subst, Types},
-        r#type::{Scheme, Type, TypeVar},
-    };
+use super::check::{Subst, Types};
+use super::exp::Expr;
+use super::r#type::{Scheme, Type, TypeVar};
 
-    #[derive(Debug, Clone, Default)]
-    pub struct TypeCtx {
-        env: Map<Rc<str>, Scheme>,
-        undo_stack: Vec<UndoAction>,
+#[derive(Clone, Copy)]
+pub struct Savepoint(usize);
+
+#[derive(Debug, Default)]
+pub struct Ctx {
+    types: Map<Rc<str>, Scheme>,
+
+    locals: Map<Rc<str>, Expr>,
+
+    level: usize,
+
+    undo_stack: Vec<UndoAction>,
+}
+
+#[derive(Debug)]
+enum UndoAction {
+    ReplaceLocal(Rc<str>, Expr, bool),
+    ReplaceType(Rc<str>, Scheme),
+    InsertLocal(Rc<str>, bool),
+    RemoveType(Rc<str>, Scheme),
+    InsertType(Rc<str>),
+}
+
+impl Ctx {
+    pub fn generalize(&self, ty: &Type) -> Scheme {
+        let mut vars = ty.ftv();
+
+        for name in &self.ftv() {
+            vars.remove(name);
+        }
+
+        Scheme(vars.into_iter().collect(), Box::new(ty.clone()))
     }
 
-    #[derive(Debug, Clone)]
-    pub enum UndoAction {
-        Insert(Rc<str>, Scheme),
-        Remove(Rc<str>),
+    pub fn insert_ty(&mut self, name: Rc<str>, scheme: Scheme) {
+        if let Some(scheme) = self.types.insert(name.clone(), scheme) {
+            self.undo_stack
+                .push(UndoAction::ReplaceType(name, scheme));
+        } else {
+            self.undo_stack.push(UndoAction::InsertType(name));
+        }
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct Savepoint(usize);
+    pub fn push_local(&mut self, name: Rc<str>, ty: Box<Type>) {
+        if let Some(expr) = self
+            .locals
+            .insert(name.clone(), Expr::DeBrujinLvl(self.level as i64))
+        {
+            self.undo_stack
+                .push(UndoAction::ReplaceLocal(name.clone(), expr, true));
 
-    impl TypeCtx {
-        pub fn get(&self, name: &str) -> Option<&Scheme> {
-            self.env.get(name)
-        }
-
-        pub fn generalize(&self, ty: &Type) -> Scheme {
-            let mut vars = ty.ftv();
-
-            for name in &self.ftv() {
-                vars.remove(name);
-            }
-
-            Scheme(vars.into_iter().collect(), Box::new(ty.clone()))
-        }
-
-        pub fn remove(&mut self, name: &str) {
-            if let Some((name, scheme)) = self.env.remove_entry(name) {
-                self.undo_stack.push(UndoAction::Insert(name, scheme));
-            }
-        }
-
-        pub fn insert(&mut self, name: Rc<str>, scheme: Scheme) {
-            if let Some(scheme) = self.env.insert(name.clone(), scheme) {
-                self.undo_stack.push(UndoAction::Insert(name, scheme));
+            if let Some(scheme) = self.types.insert(name.clone(), Scheme(vec![], ty)) {
+                self.undo_stack
+                    .push(UndoAction::ReplaceType(name.clone(), scheme));
             } else {
-                self.undo_stack.push(UndoAction::Remove(name));
+                self.undo_stack.push(UndoAction::InsertType(name));
+            }
+        } else {
+            self.undo_stack
+                .push(UndoAction::InsertLocal(name.clone(), true));
+
+            if let Some(scheme) = self.types.insert(name.clone(), Scheme(vec![], ty)) {
+                self.undo_stack
+                    .push(UndoAction::ReplaceType(name.clone(), scheme));
+            } else {
+                self.undo_stack.push(UndoAction::InsertType(name));
             }
         }
 
-        pub fn restore(&mut self, savepoint: Savepoint) {
-            while self.undo_stack.len() > savepoint.0 {
-                match self.undo_stack.pop().unwrap() {
-                    UndoAction::Insert(name, scheme) => {
-                        self.env.insert(name, scheme);
-                    }
-                    UndoAction::Remove(name) => {
-                        self.env.remove(&name);
-                    }
-                }
-            }
-        }
+        self.level += 1;
+    }
 
-        pub fn savepoint(&self) -> Savepoint {
-            Savepoint(self.undo_stack.len())
+    pub fn push_let(&mut self, name: Rc<str>, expr: Expr, scheme: Scheme) {
+        if let Some(expr) = self.locals.insert(name.clone(), expr) {
+            self.undo_stack
+                .push(UndoAction::ReplaceLocal(name.clone(), expr, false));
+
+            if let Some(scheme) = self.types.remove(&name) {
+                self.undo_stack.push(UndoAction::ReplaceType(name, scheme));
+            } else {
+                self.undo_stack.push(UndoAction::InsertType(name));
+            }
+        } else {
+            self.undo_stack.push(UndoAction::InsertLocal(name.clone(), false));
+
+            if let Some(scheme) = self.types.insert(name.clone(), scheme) {
+                self.undo_stack.push(UndoAction::ReplaceType(name, scheme));
+            } else {
+                self.undo_stack.push(UndoAction::InsertType(name));
+            }
         }
     }
 
-    impl Display for TypeCtx {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let mut iter = self.env.iter();
-
-            if let Some((key, value)) = iter.next() {
-                write!(f, "{key}: {value:#?}")?;
-                for (key, value) in iter {
-                    write!(f, ", {key}: {value:#?}")?;
+    pub fn restore(&mut self, savepoint: Savepoint) {
+        while self.undo_stack.len() > savepoint.0 {
+            let dec = match self.undo_stack.pop().unwrap() {
+                UndoAction::ReplaceLocal(name, expr, dec_level) => {
+                    self.locals.insert(name.clone(), expr).unwrap();
+                    dec_level
                 }
-            }
+                UndoAction::InsertLocal(name, dec_level) => {
+                    self.locals.remove(&name);
+                    dec_level
+                }
+                UndoAction::ReplaceType(name, scheme) => {
+                    self.types.insert(name, scheme);
+                    false
+                }
+                UndoAction::RemoveType(name, scheme) => {
+                    self.types.insert(name, scheme);
+                    false
+                }
+                UndoAction::InsertType(name) => {
+                    self.types.remove(&name);
+                    false
+                }
+            };
 
-            Ok(())
+            if dec {
+                self.level -= 1;
+            }
         }
     }
 
-    impl Types for TypeCtx {
-        fn ftv(&self) -> Set<TypeVar> {
-            self.env.values().cloned().collect::<Vec<Scheme>>().ftv()
+    pub fn hide(&mut self, name: &Rc<str>) {
+        if let Some(scheme) = self.types.remove(name) {
+            self.undo_stack
+                .push(UndoAction::RemoveType(name.clone(), scheme));
+        }
+    }
+
+    pub fn get(&self, name: &Rc<str>) -> Option<(Option<&Expr>, &Scheme)> {
+        self.types
+            .get(name)
+            .map(|scheme| (self.locals.get(name), scheme))
+    }
+
+    pub fn save(&self) -> Savepoint {
+        Savepoint(self.undo_stack.len())
+    }
+
+    pub fn level(&self) -> usize {
+        self.level
+    }
+}
+
+impl Types for Ctx {
+    fn ftv(&self) -> Set<TypeVar> {
+        self.types.values().cloned().collect::<Vec<Scheme>>().ftv()
+    }
+
+    fn apply(&mut self, s: &Subst) {
+        for value in self.types.values_mut() {
+            value.apply(s);
         }
 
-        fn apply(&mut self, s: &Subst) {
-            for value in self.env.values_mut() {
-                value.apply(s);
-            }
-
-            for action in self.undo_stack.iter_mut() {
-                if let UndoAction::Insert(_, scheme) = action {
-                    scheme.apply(s);
-                }
+        for action in self.undo_stack.iter_mut() {
+            match action {
+                UndoAction::ReplaceType(_, scheme)
+                | UndoAction::RemoveType(_, scheme) => scheme.apply(s),
+                _ => {}
             }
         }
     }
 }
-
-pub use type_ctx_impl::TypeCtx;
-
-pub mod let_bindings_impl {
-    use std::{collections::HashMap as Map, rc::Rc};
-
-    use crate::check::exp::Expr;
-
-    #[derive(Debug, Clone, Default)]
-    pub struct LetBindings {
-        map: Map<Rc<str>, Box<Expr>>,
-
-        undo_stack: Vec<UndoAction>,
-    }
-
-    impl LetBindings {
-        pub fn push(&mut self, name: Rc<str>, expr: Box<Expr>) -> Savepoint {
-            let savepoint = self.undo_stack.len();
-
-            match self.map.insert(name.clone(), expr) {
-                Some(expr) => {
-                    self.undo_stack.push(UndoAction::Insert(name, expr));
-                }
-                None => {
-                    self.undo_stack.push(UndoAction::Remove(name));
-                }
-            }
-
-            Savepoint(savepoint)
-        }
-
-        pub fn restore(&mut self, savepoint: Savepoint) {
-            while self.undo_stack.len() > savepoint.0 {
-                if let Some(action) = self.undo_stack.pop() {
-                    match action {
-                        UndoAction::Remove(name) => {
-                            self.map.remove(&name);
-                        }
-                        UndoAction::Insert(name, expr) => {
-                            self.map.insert(name, expr);
-                        }
-                    }
-                }
-            }
-        }
-
-        pub fn get(&self, name: &str) -> Option<Box<Expr>> {
-            self.map.get(name).map(Clone::clone)
-        }
-    }
-
-    pub struct Savepoint(usize);
-
-    #[derive(Debug, Clone)]
-    enum UndoAction {
-        Remove(Rc<str>),
-        Insert(Rc<str>, Box<Expr>),
-    }
-}
-
-pub use let_bindings_impl::LetBindings;

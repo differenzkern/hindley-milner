@@ -42,6 +42,11 @@ fun alpha a n = match a {
    }
 }
 
+fun is_odd n = match n {
+  | Z → False
+  | S n → neg (is_odd n)
+}
+
 fun phi a b c = match c {
   | Z → add a b
   | S c → match b {
@@ -50,5 +55,4 @@ fun phi a b c = match c {
   }
 }
 
-λ z. (let id = λ x. x in (let a = id z in match z { | Z → a | S n → (id True) }))
-
+λ z. (let id = λ x. x in (let a = id z in match z { | Z → is_odd a | S n → (id True) }))
