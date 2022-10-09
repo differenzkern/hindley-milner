@@ -11,7 +11,7 @@ use crate::parse::ast::Span;
 use crate::parse::ast::{AdtDef, Ast, Clause, FunctionDef, Literal, Spanned};
 
 use super::{
-    context::{LetBindings, TypeCtx},
+    context::Ctx,
     exp::{Cons, ConsRef, Env, Expr, FunRef},
     r#type::{Fresh, PrimType, Scheme, Type, TypeVar},
 };
@@ -90,15 +90,11 @@ impl<T: Types> Types for Vec<T> {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct TIState {
     fresh: Fresh,
-    ctx: TypeCtx,
+    ctx: Ctx,
     env: Env,
-
-    // track de bruijn levels
-    locals: LocalNames,
-    lets: LetBindings,
 }
 
 #[derive(Debug, Clone)]
@@ -157,7 +153,7 @@ impl TIState {
     }
 
     fn ti(&mut self, exp: &Rc<Spanned<Ast>>) -> Result<(Subst, Expr, Type), Report> {
-        let savepoint = self.ctx.savepoint();
+        let savepoint = self.ctx.save();
 
         let res = || -> Result<(Subst, Expr, Type), Report> {
             let span = exp.deref().span();
@@ -180,37 +176,27 @@ impl TIState {
     }
 
     fn ti_var(&mut self, name: &Rc<str>, span: Span) -> Result<(Subst, Expr, Type), Report> {
-        let expr = match self.locals.get(name) {
-            Some(idx) => Expr::DeBrujinIdx(idx as i64),
-            None => match self.lets.get(name) {
-                Some(r#let) => *r#let,
-                None => match self.env.lookup_curried_cons(name) {
-                    Ok(exp) => *exp,
-                    Err(_) => match self.env.lookup_fun(name) {
-                        Ok(fun) => Expr::Fun(fun),
-                        Err(_) => match self.ctx.get(name) {
-                            Some(scheme) => {
-                                return Ok((
-                                    Subst::null(),
-                                    Expr::Fun(FunRef(self.env.functions.len())),
-                                    self.fresh.instantiate(scheme),
-                                ));
-                            }
-                            None => {
-                                return Err(Report::build(ReportKind::Error, (), 0)
-                                    .with_label(
-                                        Label::new(span.into())
-                                            .with_message(format!("unbound variable {name}")),
-                                    )
-                                    .finish());
-                            }
-                        },
-                    },
-                },
-            },
+        let (expr, r#type) = match self.ctx.get(name) {
+            Some((expr, scheme)) => {
+                let r#type = self.fresh.instantiate(scheme);
+
+                let expr = match expr.cloned().or_else(|| self.env.lookup(name)) {
+                    Some(expr) => expr,
+                    None => {
+                        panic!("name in env but can't find definition")
+                    }
+                };
+                (expr, r#type)
+            }
+            None => {
+                return Err(Report::build(ReportKind::Error, (), 0)
+                    .with_label(
+                        Label::new(span.into()).with_message(format!("unbound variable {name}")),
+                    )
+                    .finish())
+            }
         };
 
-        let r#type = self.fresh.instantiate(self.ctx.get(name).unwrap());
         Ok((Subst::null(), expr, r#type))
     }
 
@@ -221,17 +207,12 @@ impl TIState {
         _: Span,
     ) -> Result<(Subst, Expr, Type), Report> {
         let mut tv = Type::Var(self.fresh.new_type_var());
-        self.ctx
-            .insert(name.to_owned(), Scheme(vec![], Box::new(tv.clone())));
 
-        let savepoint = self.locals.savepoint();
-        self.locals.push(name.clone());
+        self.ctx.push_local(name.to_owned(), Box::new(tv.clone()));
 
         let (s1, e, t1) = self.ti(e)?;
 
         tv.apply(&s1);
-
-        self.locals.restore(savepoint);
 
         Ok((
             s1,
@@ -281,20 +262,16 @@ impl TIState {
     ) -> Result<(Subst, Expr, Type), Report> {
         let (s1, mut e1, t1) = self.ti(e1)?;
 
-        e1.convert_idx_to_lvl(self.locals.level() as i64, 0);
+        e1.convert_idx_to_lvl(self.ctx.level() as i64, 0);
 
         self.ctx.apply(&s1);
 
         let t_ = self.ctx.generalize(&t1);
 
-        self.ctx.insert(x.to_owned(), t_);
+        self.ctx.push_let(x.clone(), e1, t_);
         self.ctx.apply(&s1);
 
-        let savepoint = self.lets.push(x.clone(), Box::new(e1));
-
         let (s2, e2, t2) = self.ti(e2)?;
-
-        self.lets.restore(savepoint);
 
         Ok((s1.compose(&s2), e2, t2))
     }
@@ -310,7 +287,6 @@ impl TIState {
         let output_ty_var = self.fresh.new_type_var();
         let mut output_ty = Type::Var(output_ty_var);
 
-        self.ctx.remove(name);
 
         let mut ti_arms = std::iter::repeat_with(|| None)
             .take(arms.len())
@@ -318,7 +294,7 @@ impl TIState {
 
         for clause in arms {
             let (s_, clause_idx, expr) =
-                self.ti_match_arm(&mut input_ty, &mut output_ty, clause)?;
+                self.ti_match_arm(&name.0, &mut input_ty, &mut output_ty, clause)?;
 
             ti_arms[clause_idx] = Some(expr);
 
@@ -337,6 +313,7 @@ impl TIState {
 
     fn ti_match_arm(
         &mut self,
+        name: &Rc<str>,
         input: &mut Type,
         output: &mut Type,
         clause: &Clause,
@@ -362,9 +339,16 @@ impl TIState {
         })?;
 
         self.ctx.apply(&s___);
-
         input.apply(&s___);
 
+        let s = self.unify(input, &Type::Adt(cons_ref.0)).map_err(|err| {
+            Report::build(ReportKind::Error, (), 0)
+                .with_message(err.to_string())
+                .finish()
+        })?;
+
+        input.apply(&s);
+        self.ctx.apply(&s);
 
         let cons = self.env.deref_cons(cons_ref);
         let num_cons_args = cons.arguments().len();
@@ -383,15 +367,12 @@ impl TIState {
         }
 
         let expr = clause.expr.clone();
+        let savepoint = self.ctx.save();
 
-        let savepoint = self.locals.savepoint();
-
+        self.ctx.hide(name);
         for (ty, arg) in cons.arguments().iter().zip(clause.variables.iter()) {
-            self.ctx
-                .insert(arg.0.clone(), Scheme(vec![], Box::new(Type::Adt(*ty))));
-            self.locals.push(arg.0.clone());
+            self.ctx.push_local(arg.0.clone(), Box::new(Type::Adt(*ty)));
         }
-
 
         let res = |this: &mut Self| -> Result<(Subst, usize, Expr), Report> {
             let (s__, expr, ty) = this.ti(&expr)?;
@@ -413,18 +394,15 @@ impl TIState {
             output.apply(&s_);
             input.apply(&s_);
 
-            let s = this.unify(input, &Type::Adt(cons_ref.0)).map_err(|err| {
-                Report::build(ReportKind::Error, (), 0)
-                    .with_message(err.to_string())
-                    .finish()
-            })?;
-            input.apply(&s);
-            this.ctx.apply(&s);
 
-            Ok((s___.compose(&s__.compose(&s_.compose(&s))), cons_ref.1, expr))
+            Ok((
+                s__.compose(&s_.compose(&s.compose(&s___))),
+                cons_ref.1,
+                expr,
+            ))
         }(self);
 
-        self.locals.restore(savepoint);
+        self.ctx.restore(savepoint);
 
         res
     }
@@ -488,7 +466,7 @@ impl TIState {
             }
 
             self.ctx
-                .insert(con.name.clone(), Scheme(vec![], Box::new(r#type)));
+                .insert_ty(con.name.clone(), Scheme(vec![], Box::new(r#type)));
         }
 
         self.env.adts.push(cons);
@@ -497,17 +475,9 @@ impl TIState {
     }
 
     pub fn check_exp(&mut self, expr: &Rc<Spanned<Ast>>) -> Result<Type, Report> {
-        let savepoint = self.ctx.savepoint();
-
-        let res = || -> Result<Type, Report> {
-            let (subst, _, mut ty) = self.ti(expr)?;
-            ty.apply(&subst);
-            Ok(ty)
-        }();
-
-        self.ctx.restore(savepoint);
-
-        res
+        let (subst, _, mut ty) = self.ti(expr)?;
+        ty.apply(&subst);
+        Ok(ty)
     }
 
     pub fn check_fun(&mut self, fun: FunctionDef) -> Result<Type, Report> {
@@ -529,16 +499,34 @@ impl TIState {
             body = Rc::new(Spanned(Ast::Abs(arg.clone(), body), span));
         }
 
-        self.ctx.insert(fun.name, Scheme(vec![], Box::new(r#type)));
+        let savepoint_failure = self.ctx.save();
+
+
+        self.ctx
+            .insert_ty(fun.name.clone(), Scheme(vec![], Box::new(r#type)));
+
+        let savepoint_success = self.ctx.save();
+
+
+        self.env.fun_map.insert(fun.name.clone(), FunRef(self.env.fun_map.len()));
 
         let res = match self.ti(&body) {
             Ok((s, _, mut ty)) => {
                 ty.apply(&s);
 
+                self.ctx.restore(savepoint_success);
+
                 Ok(ty)
             }
-            Err(err) => Err(err),
+            Err(err) => {
+                self.env.fun_map.remove(&fun.name);
+                self.ctx.restore(savepoint_failure);
+
+
+                Err(err)
+            } ,
         };
+
 
         res
     }
@@ -592,65 +580,4 @@ impl Subst {
 
         subst
     }
-}
-
-#[derive(Debug, Clone, Default)]
-struct LocalNames {
-    level: usize,
-
-    // map names to de bruijn levels
-    map: Map<Rc<str>, usize>,
-
-    undo_stack: Vec<UndoAction>,
-}
-
-impl LocalNames {
-    pub fn level(&self) -> usize {
-        self.level
-    }
-
-    pub fn push(&mut self, name: Rc<str>) {
-        if let Some(lvl) = self.map.insert(name.clone(), self.level) {
-            self.undo_stack.push(UndoAction::InsertName(name, lvl));
-        } else {
-            self.undo_stack.push(UndoAction::RemoveName(name));
-        }
-        self.level += 1;
-    }
-
-    pub fn savepoint(&self) -> Savepoint {
-        Savepoint(self.undo_stack.len())
-    }
-
-    pub fn restore(&mut self, savepoint: Savepoint) {
-        while self.undo_stack.len() > savepoint.0 {
-            if let Some(action) = self.undo_stack.pop() {
-                match action {
-                    UndoAction::RemoveName(name) => {
-                        self.map.remove(&name);
-                        self.level -= 1;
-                    }
-                    UndoAction::InsertName(name, lvl) => {
-                        self.map.insert(name, lvl);
-                        self.level -= 1;
-                    }
-                }
-            }
-        }
-    }
-
-    // get de brujin index
-    pub fn get(&self, name: &str) -> Option<usize> {
-        self.map.get(name).map(|lvl| self.level - 1 - *lvl)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Savepoint(usize);
-
-#[derive(Debug, Clone)]
-
-enum UndoAction {
-    RemoveName(Rc<str>),
-    InsertName(Rc<str>, usize),
 }

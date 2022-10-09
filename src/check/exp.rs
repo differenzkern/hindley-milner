@@ -85,6 +85,10 @@ impl Env {
         self.types.get(adt_ref.0).unwrap()
     }
 
+    pub fn lookup(&self, name: &str) -> Option<Expr> {
+        self.lookup_fun(name).to_owned().map(Expr::Fun).or_else(|_| self.lookup_curried_cons(name).map(|expr| *expr)).ok()
+    }
+
     pub fn lookup_cons<'a>(&self, name: &'a str) -> Result<ConsRef, EnvError<'a>> {
         match self.con_map.get(name) {
             Some(value) => Ok(*value),
