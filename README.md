@@ -8,6 +8,7 @@ the two papers that I used for understanding and implementing hindley-milner typ
 Planned features:
 * system f/parametric polymorphism?
 * rank n types?
+* mutual recursive function definitions
 * backend/runtime
 
 Implemented:
