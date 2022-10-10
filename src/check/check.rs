@@ -7,13 +7,13 @@ use std::{
 
 use ariadne::{Label, Report, ReportKind};
 
-use crate::parse::ast::Span;
-use crate::parse::ast::{AdtDef, Ast, Clause, FunctionDef, Literal, Spanned};
+use crate::syntax::ast::{AdtDef, Ast, Clause, FunctionDef, Literal, Span, Spanned};
 
 use super::{
     context::Ctx,
-    exp::{Cons, ConsRef, Env, Expr, FunRef},
-    r#type::{Fresh, PrimType, Scheme, Type, TypeEnv, TypeVar},
+    env::Env,
+    expr::{Cons, ConsRef, Expr, FunRef},
+    r#type::{Fresh, PrimType, Scheme, Type, TypePrinter, TypeVar},
 };
 
 pub trait Types {
@@ -136,8 +136,8 @@ impl TIState {
             (Type::Var(u), t) | (t, Type::Var(u)) => self.var_bind(*u, t),
             (Type::Adt(n), Type::Adt(m)) if n == m => Ok(Subst::null()),
             (ty1, ty2) => Err(UnificationError::IncombatibleTypes(
-                format!("{}", TypeEnv(&self.env, &ty1)),
-                format!("{}", TypeEnv(&self.env, &ty2)),
+                format!("{}", TypePrinter(&self.env, &ty1)),
+                format!("{}", TypePrinter(&self.env, &ty2)),
             )),
         }
     }
@@ -152,7 +152,7 @@ impl TIState {
         if ty.ftv().contains(&var) {
             return Err(UnificationError::OccursIn(
                 var,
-                format!("{}", TypeEnv(&self.env, ty)),
+                format!("{}", TypePrinter(&self.env, ty)),
             ));
         }
 
@@ -269,7 +269,7 @@ impl TIState {
     ) -> Result<(Subst, Expr, Type), Report> {
         let (s1, mut e1, t1) = self.ti(e1)?;
 
-        e1.convert_idx_to_lvl(self.ctx.level() as i64, 0);
+        e1.convert_idx_to_lvl(self.ctx.level(), 0);
 
         self.ctx.apply(&s1);
 
@@ -302,7 +302,7 @@ impl TIState {
             let (s_, clause_idx, expr) =
                 self.ti_match_arm(&name.0, &mut input_ty, &mut output_ty, clause)?;
 
-            ti_arms[clause_idx] = Some(expr);
+            ti_arms[clause_idx] = Some((clause.0.variables.len(), expr));
 
             self.ctx.apply(&s_);
             input_ty.apply(&s_);
@@ -310,13 +310,26 @@ impl TIState {
             s = s_.compose(&s);
         }
 
+        let aref = self
+            .env
+            .lookup_cons(arms[0].0.constructor.0.as_ref())
+            .map(|cref| cref.0)
+            .map_err(|err| {
+                Report::build(ReportKind::Error, (), 0)
+                    .with_label(
+                        Label::new(arms[0].0.constructor.span().into())
+                            .with_message(err.to_string()),
+                    )
+                    .finish()
+            })?;
+
         output_ty.apply(&s);
 
         let span = arms.first().unwrap().span().start..arms.last().unwrap().span().end;
 
         let ti_arms = ti_arms
             .into_iter()
-            .try_collect::<Vec<Expr>>()
+            .try_collect::<Vec<(usize, Expr)>>()
             .ok_or_else(|| {
                 Report::build(ReportKind::Error, (), 0)
                     .with_label(Label::new(span))
@@ -324,7 +337,7 @@ impl TIState {
                     .finish()
             })?;
 
-        Ok((s, Expr::Match(Box::new(expr), ti_arms), output_ty))
+        Ok((s, Expr::Match(aref, Box::new(expr), ti_arms), output_ty))
     }
 
     fn ti_match_arm(
@@ -489,10 +502,11 @@ impl TIState {
         Ok(())
     }
 
-    pub fn check_exp(&mut self, expr: &Rc<Spanned<Ast>>) -> Result<Type, Report> {
-        let (subst, _, mut ty) = self.ti(expr)?;
+    pub fn check_exp(&mut self, expr: &Rc<Spanned<Ast>>) -> Result<(Expr, Type), Report> {
+        let (subst, expr, mut ty) = self.ti(expr)?;
         ty.apply(&subst);
-        Ok(ty)
+
+        Ok((expr, ty))
     }
 
     pub fn check_fun(&mut self, fun: FunctionDef) -> Result<Type, Report> {
@@ -514,26 +528,35 @@ impl TIState {
             body = Rc::new(Spanned(Ast::Abs(arg.clone(), body), span));
         }
 
-        let savepoint_failure = self.ctx.save();
+        let savepoint = self.ctx.save();
 
         self.ctx
             .insert_ty(fun.name.clone(), Scheme(vec![], Box::new(r#type)));
 
-        let savepoint_success = self.ctx.save();
-
         self.env
             .fun_map
-            .insert(fun.name.clone(), FunRef(self.env.fun_map.len()));
+            .insert(fun.name.clone(), FunRef(self.env.functions.len()));
 
         match self.ti(&body) {
-            Ok((s, _, mut ty)) => {
+            Ok((s, mut expr, mut ty)) => {
                 ty.apply(&s);
-                self.ctx.restore(savepoint_success);
+
+                expr.convert_lvl_to_idx(0);
+
+                self.ctx.restore(savepoint);
+
+                self.ctx
+                    .insert_ty(fun.name.clone(), self.ctx.generalize(&ty));
+
+                self.env
+                    .functions
+                    .push((expr, ty.clone(), fun.name.clone()));
+
                 Ok(ty)
             }
             Err(err) => {
                 self.env.fun_map.remove(&fun.name);
-                self.ctx.restore(savepoint_failure);
+                self.ctx.restore(savepoint);
 
                 Err(err)
             }

@@ -3,12 +3,13 @@ use std::rc::Rc;
 
 use ariadne::Source;
 use check::check::TIState;
-use parse::ast::Toplevel;
+use syntax::ast::Toplevel;
 
-use crate::check::r#type::TypeEnv;
+use crate::check::{env::ExprPrinter, expr::EvalContext, r#type::TypePrinter};
 
 pub mod check;
-pub mod parse;
+pub mod compile;
+pub mod syntax;
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -21,7 +22,7 @@ fn main() -> std::io::Result<()> {
 
     let input = std::fs::read_to_string(&args.get(1).unwrap()).unwrap();
 
-    let toplevel = self::parse::parser::parse(input.as_str());
+    let toplevel = self::syntax::parse(input.as_str());
 
     let mut ti = TIState::default();
 
@@ -33,15 +34,20 @@ fn main() -> std::io::Result<()> {
 
                 match ti.check_fun(fun) {
                     Ok(ty) => {
-                        println!("{name}: {}", TypeEnv(ti.env(), &ty));
+                        println!("{name}: {}", TypePrinter(ti.env(), &ty));
                         Ok(())
                     }
                     Err(report) => Err(report),
                 }
             }
             Toplevel::Expr(expr) => match ti.check_exp(&Rc::new(expr)) {
-                Ok(ty) => {
-                    println!("{}", TypeEnv(ti.env(), &ty));
+                Ok((expr, ty)) => {
+                    let env = ti.env().clone();
+                    let ctx = EvalContext::new(env);
+                    let expr = ctx.eval(&expr);
+
+                    print!("{}", ExprPrinter(ti.env(), &expr, 0));
+                    println!(": {}", TypePrinter(ti.env(), &ty));
                     Ok(())
                 }
                 Err(report) => Err(report),

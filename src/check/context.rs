@@ -2,7 +2,7 @@ use std::collections::{HashMap as Map, HashSet as Set};
 use std::rc::Rc;
 
 use super::check::{Subst, Types};
-use super::exp::Expr;
+use super::expr::Expr;
 use super::r#type::{Scheme, Type, TypeVar};
 
 #[derive(Clone, Copy)]
@@ -50,7 +50,7 @@ impl Ctx {
     pub fn push_local(&mut self, name: Rc<str>, ty: Box<Type>) {
         if let Some(expr) = self
             .locals
-            .insert(name.clone(), Expr::DeBrujinLvl(self.level as i64))
+            .insert(name.clone(), Expr::DeBrujinLvl(self.level))
         {
             self.undo_stack
                 .push(UndoAction::ReplaceLocal(name.clone(), expr, true));
