@@ -41,12 +41,16 @@ fn main() -> std::io::Result<()> {
                 }
             }
             Toplevel::Expr(expr) => match ti.check_exp(&Rc::new(expr)) {
-                Ok((expr, ty)) => {
-                    let env = ti.env().clone();
-                    let ctx = EvalContext::new(env);
-                    let expr = ctx.eval(&expr);
+                Ok((mut expr, ty)) => {
+                    let ctx = EvalContext::new(ti.env());
+                    let expr = ctx.eval(&mut expr);
 
-                    print!("{}", ExprPrinter(ti.env(), &expr, 0));
+                    if let Some(expr) = expr {
+                        print!("{}", ExprPrinter(ti.env(), &expr, 0));
+                    } else {
+                        print!("- ");
+                    }
+
                     println!(": {}", TypePrinter(ti.env(), &ty));
                     Ok(())
                 }
