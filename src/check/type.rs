@@ -2,7 +2,8 @@ use std::collections::HashMap as Map;
 
 use super::{
     check::{Subst, Types},
-    exp::{AdtRef, Env},
+    env::Env,
+    expr::AdtRef,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,11 +27,11 @@ pub enum Type {
     Prim(PrimType),
 }
 
-pub struct TypeEnv<'a>(pub &'a Env, pub &'a Type);
+pub struct TypePrinter<'a>(pub &'a Env, pub &'a Type);
 
-impl std::fmt::Display for TypeEnv<'_> {
+impl std::fmt::Display for TypePrinter<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let TypeEnv(env, ty) = self;
+        let TypePrinter(env, ty) = self;
 
         match ty {
             Type::Scheme(scheme) => {
@@ -44,11 +45,16 @@ impl std::fmt::Display for TypeEnv<'_> {
                     write!(f, ": ")?;
                 }
 
-                TypeEnv(env, &scheme.1).fmt(f)
+                TypePrinter(env, &scheme.1).fmt(f)
             }
             Type::Var(TypeVar(var)) => write!(f, "'{var}"),
-            Type::Lam(ty1, ty2) => write!(f, "{} → {}", TypeEnv(env, &*ty1), TypeEnv(env, &*ty2)),
-            Type::Adt(adt) =>  write!(f, "{}", env.get_adt(*adt).name),
+            Type::Lam(ty1, ty2) => write!(
+                f,
+                "{} → {}",
+                TypePrinter(env, &*ty1),
+                TypePrinter(env, &*ty2)
+            ),
+            Type::Adt(adt) => write!(f, "{}", env.get_adt(*adt).name),
             Type::Prim(_) => todo!(),
         }
     }

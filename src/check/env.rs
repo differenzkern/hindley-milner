@@ -1,63 +1,17 @@
 use std::collections::HashMap as Map;
 use std::rc::Rc;
 
-use crate::parse::ast::{AdtDef, Constructor};
+use crate::syntax::ast::{AdtDef, Constructor};
 
-use super::r#type::Type;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConsRef(pub AdtRef, pub usize);
-
-impl From<ConsRef> for AdtRef {
-    fn from(cons_ref: ConsRef) -> Self {
-        cons_ref.0
-    }
-}
-
-impl From<&ConsRef> for AdtRef {
-    fn from(cons_ref: &ConsRef) -> Self {
-        cons_ref.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FunRef(pub usize);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AdtRef(pub usize);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Name {
-    Cons(ConsRef),
-    Fun(FunRef),
-    Adt(AdtRef),
-}
-
-#[derive(Debug, Clone)]
-pub enum EnvError<'a> {
-    SymbolNotFound(&'a str),
-    NotAFunction { name: Rc<str> },
-    NotAType { name: &'a str },
-    NotACons { name: &'a str },
-}
-
-impl<'a> std::fmt::Display for EnvError<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EnvError::SymbolNotFound(name) => {
-                write!(f, "could not find symbol {name} in environment")
-            }
-            EnvError::NotAFunction { name } => write!(f, "{name} is not a function"),
-            EnvError::NotAType { name } => write!(f, "{name} is not a type"),
-            EnvError::NotACons { name } => write!(f, "{name} is not a constructor"),
-        }
-    }
-}
+use super::{
+    expr::{AdtRef, Cons, ConsRef, EnvError, Expr, FunRef},
+    r#type::Type,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct Env {
     pub types: Vec<AdtDef>,
-    pub functions: Vec<(Expr, Type)>,
+    pub functions: Vec<(Expr, Type, Rc<str>)>,
 
     pub adts: Vec<Vec<Cons>>,
 
@@ -68,7 +22,7 @@ pub struct Env {
 }
 
 impl Env {
-    pub fn get_function(&self, fref: FunRef) -> &(Expr, Type) {
+    pub fn get_function(&self, fref: FunRef) -> &(Expr, Type, Rc<str>) {
         self.functions.get(fref.0).unwrap()
     }
 
@@ -127,9 +81,9 @@ impl Env {
         expr: Expr,
         r#type: Type,
     ) -> Result<FunRef, ()> {
-        if let std::collections::hash_map::Entry::Vacant(e) = self.fun_map.entry(name) {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.fun_map.entry(name.clone()) {
             let idx = self.functions.len();
-            self.functions.push((expr, r#type));
+            self.functions.push((expr, r#type, name));
             e.insert(FunRef(idx));
 
             Ok(FunRef(idx))
@@ -162,7 +116,7 @@ impl Env {
                 ConsRef(adt_ref, idx),
                 (0usize..con.arguments.len())
                     .rev()
-                    .map(|idx| Expr::DeBrujinIdx(idx as i64))
+                    .map(|idx| Expr::DeBrujinIdx(idx))
                     .collect(),
             );
 
@@ -191,60 +145,67 @@ impl Env {
     pub fn is_fresh(&self, name: &str) -> bool {
         !self.fun_map.contains_key(name) && !self.adt_map.contains_key(name)
     }
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expr {
-    App(Box<Expr>, Box<Expr>),
-    ConsApp(ConsRef, Vec<Expr>),
-    DeBrujinIdx(i64),
-    DeBrujinLvl(i64),
-    Lam(Box<Expr>),
-    Match(Box<Expr>, Vec<Expr>),
-    Fun(FunRef),
-}
-
-impl Expr {
-    pub fn convert_idx_to_lvl(&mut self, level: i64, max_idx: i64) {
-        match self {
+    pub fn pretty_print(
+        &self,
+        expr: &Expr,
+        lvl: usize,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        match expr {
             Expr::App(e1, e2) => {
-                e1.convert_idx_to_lvl(level, max_idx);
-                e2.convert_idx_to_lvl(level, max_idx);
+                write!(f, "(")?;
+                self.pretty_print(e1, lvl, f)?;
+                write!(f, ") (")?;
+                self.pretty_print(e2, lvl, f)?;
+                write!(f, ")")
             }
-            Expr::ConsApp(_, e2) => {
-                e2.iter_mut()
-                    .for_each(|e| e.convert_idx_to_lvl(level, max_idx));
-            }
-            Expr::DeBrujinIdx(idx) => {
-                if *idx >= max_idx {
-                    *self = Expr::DeBrujinLvl(level - 1 - *idx);
+            Expr::ConsApp(cref, args) => {
+                let cons = self.get_cons(*cref);
+                write!(f, "{} ", cons.name)?;
+                for (expr, _ty) in args.iter().zip(
+                    cons.arguments
+                        .iter()
+                        .map(|arg| Type::Adt(self.lookup_adt(arg).unwrap())),
+                ) {
+                    self.pretty_print(expr, lvl, f)?;
                 }
+                Ok(())
             }
-            Expr::Lam(e) => {
-                e.convert_idx_to_lvl(level + 1, max_idx + 1);
+            Expr::DeBrujinIdx(idx) => write!(f, "{} ", lvl - 1 - *idx),
+            Expr::DeBrujinLvl(lvl) => write!(f, "{lvl} "),
+            Expr::Lam(expr) => {
+                write!(f, "λ {lvl}. ")?;
+                self.pretty_print(expr, lvl + 1, f)
             }
-            Expr::Match(e1, e2) => {
-                e1.convert_idx_to_lvl(level, max_idx);
-                e2.iter_mut()
-                    .for_each(|e| e.convert_idx_to_lvl(level, max_idx));
+            Expr::Match(aref, expr, arms) => {
+                write!(f, "match ")?;
+                self.pretty_print(expr, lvl, f)?;
+                write!(f, "{{ ")?;
+                for (idx, arm) in arms.iter().enumerate() {
+                    let cons = self.get_cons(ConsRef(*aref, idx));
+                    write!(f, "| {}", cons.name)?;
+                    for args in &cons.arguments {
+                        write!(f, " {args}")?;
+                    }
+                    write!(f, " → ")?;
+                    self.pretty_print(&arm.1, lvl + cons.arguments.len(), f)?;
+                }
+
+                write!(f, "}} ")
             }
-            _ => {}
+            Expr::Fun(fref) => {
+                write!(f, "{} ", self.get_function(*fref).2)
+            }
+            _ => panic!(),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DeBrujin(usize);
+pub struct ExprPrinter<'a>(pub &'a Env, pub &'a Expr, pub usize);
 
-#[derive(Debug, Clone)]
-pub struct Cons(pub ConsRef, pub Vec<AdtRef>);
-
-impl Cons {
-    pub fn cons_ref(&self) -> ConsRef {
-        self.0
-    }
-
-    pub fn arguments(&self) -> &Vec<AdtRef> {
-        &self.1
+impl std::fmt::Display for ExprPrinter<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.pretty_print(self.1, self.2, f)
     }
 }
