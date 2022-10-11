@@ -503,8 +503,9 @@ impl TIState {
     }
 
     pub fn check_exp(&mut self, expr: &Rc<Spanned<Ast>>) -> Result<(Expr, Type), Report> {
-        let (subst, expr, mut ty) = self.ti(expr)?;
+        let (subst, mut expr, mut ty) = self.ti(expr)?;
         ty.apply(&subst);
+        expr.convert_lvl_to_idx(0);
 
         Ok((expr, ty))
     }

@@ -116,7 +116,7 @@ impl Env {
                 ConsRef(adt_ref, idx),
                 (0usize..con.arguments.len())
                     .rev()
-                    .map(|idx| Expr::DeBrujinIdx(idx))
+                    .map(Expr::DeBrujinIdx)
                     .collect(),
             );
 
@@ -173,7 +173,6 @@ impl Env {
                 Ok(())
             }
             Expr::DeBrujinIdx(idx) => write!(f, "{} ", lvl - 1 - *idx),
-            Expr::DeBrujinLvl(lvl) => write!(f, "{lvl} "),
             Expr::Lam(expr) => {
                 write!(f, "λ {lvl}. ")?;
                 self.pretty_print(expr, lvl + 1, f)
