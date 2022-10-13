@@ -5,7 +5,7 @@ use ariadne::Source;
 use check::check::TIState;
 use syntax::ast::Toplevel;
 
-use crate::check::{env::ExprPrinter, expr::EvalContext, r#type::TypePrinter};
+use crate::check::{env::ExprPrinter, eval::EvalContext, r#type::TypePrinter};
 
 pub mod check;
 pub mod compile;
