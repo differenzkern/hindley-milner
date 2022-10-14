@@ -1,4 +1,4 @@
-use std::{borrow::Cow, cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use super::{
     env::Env,
@@ -6,10 +6,10 @@ use super::{
 };
 
 #[derive(Debug)]
-enum Sem<'a> {
-    Lam(&'a RefCell<Cow<'a, Vec<Rc<Sem<'a>>>>>, &'a Expr),
-    ConsApp(ConsRef, Vec<Rc<Sem<'a>>>),
-    Syn(&'a Expr),
+enum Sem {
+    Lam(Rc<Vec<Rc<Sem>>>, Rc<Expr>),
+    ConsApp(ConsRef, Vec<Rc<Sem>>),
+    Syn(Rc<Expr>),
 }
 
 pub struct EvalContext<'a> {
@@ -21,13 +21,13 @@ impl<'a> EvalContext<'a> {
         Self { env }
     }
 
-    fn meaning(&self, tm: &'a Expr, ctx: &'a RefCell<Cow<'a, Vec<Rc<Sem<'a>>>>>) -> Rc<Sem<'a>> {
+    fn meaning(&self, tm: &Expr, ctx: &Vec<Rc<Sem>>) -> Rc<Sem> {
         match tm {
             Expr::App(s, t) => {
-                let res = self.meaning(s, ctx);
-                if let Sem::Lam(ctx_, tm) = res.as_ref() {
-                    ctx_.borrow_mut().to_mut().push(self.meaning(t, ctx));
-                    self.meaning(tm, ctx_)
+                if let Sem::Lam(ctx_, tm) = self.meaning(s, ctx).as_ref() {
+                    let mut ctx_ = ctx_.as_ref().clone();
+                    ctx_.push(self.meaning(t, ctx));
+                    self.meaning(tm.as_ref(), &ctx_)
                 } else {
                     panic!()
                 }
@@ -38,52 +38,55 @@ impl<'a> EvalContext<'a> {
                     .map(|arg| self.meaning(arg, ctx))
                     .collect::<Vec<Rc<Sem>>>(),
             )),
-            Expr::DeBrujinIdx(idx) => {
-                let ctx = ctx.borrow();
-                ctx[ctx.len() - 1 - *idx].clone()
-            }
-            Expr::DeBrujinLvl(lvl) => ctx.borrow()[*lvl].clone(),
-            Expr::Lam(s) => Rc::new(Sem::<'a>::Lam(ctx, s)),
-            Expr::Match(_aref, expr, arms) => {
+            Expr::DeBrujinIdx(idx) => ctx[ctx.len() - 1 - *idx].clone(),
+            Expr::Lam(s) => Rc::new(Sem::Lam(Rc::new(ctx.clone()), s.clone())),
+            Expr::Match(aref, expr, arms) => {
                 if let Sem::ConsApp(cons, args) = self.meaning(expr, ctx).as_ref() {
-                    {
-                        let mut ctx = ctx.borrow_mut();
-                        let ctx = ctx.to_mut();
+                    let mut ctx = ctx.clone();
 
-                        for arg in args {
-                            ctx.push(arg.clone());
-                        }
+                    for arg in args {
+                        ctx.push(arg.clone());
                     }
 
                     let arm = &arms[cons.1];
-                    self.meaning(&arm.1, ctx)
+                    self.meaning(&arm.1, &ctx)
                 } else {
-                    Rc::new(Sem::Syn(&tm))
+                    Rc::new(Sem::Syn(Rc::new(Expr::Match(
+                        *aref,
+                        expr.clone(),
+                        arms.clone(),
+                    ))))
                 }
             }
-            Expr::Fun(fref) => self.meaning(&self.env.get_function(*fref).0, ctx),
+            Expr::Fun(fref) => self.meaning(self.env.get_fun(*fref).1.as_ref(), ctx),
         }
     }
 
-    fn reify(&self, sm: Rc<Sem>) -> Option<Expr> {
-        if let Sem::ConsApp(cref, args) = sm.as_ref() {
-            let args = args
-                .iter()
-                .map(|arg| self.reify(arg.clone()).unwrap())
-                .collect();
-            Some(Expr::ConsApp(*cref, args))
-        } else {
-            None
+    fn reify(&self, sm: Rc<Sem>) -> Rc<Expr> {
+        match sm.as_ref() {
+            Sem::Lam(_, tm) => Rc::new(Expr::Lam(tm.clone())),
+            Sem::ConsApp(cref, args) => {
+                let args = args.iter().map(|arg| self.reify(arg.clone())).collect();
+
+                Rc::new(Expr::ConsApp(*cref, args))
+            }
+            Sem::Syn(expr) => expr.clone(),
         }
     }
 
-    pub fn eval(&self, tm: &Expr) -> Option<Expr> {
-        let ctx = RefCell::new(Cow::Owned(Vec::new()));
+    pub fn eval(&self, tm: &Expr) -> Option<Rc<Expr>> {
+        let mut ctx = Vec::new();
         let mut tm = tm.clone();
-        tm.convert_lvl_to_idx(0);
 
         let val = self.meaning(&tm, &ctx);
 
-        self.reify(val.into())
+        let res = self.reify(val.into());
+
+        match res.as_ref() {
+            Expr::ConsApp(_, _) => {}
+            _ => return None,
+        }
+
+        Some(res)
     }
 }

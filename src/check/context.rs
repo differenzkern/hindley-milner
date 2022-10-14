@@ -10,9 +10,9 @@ pub struct Savepoint(usize);
 
 #[derive(Debug, Default)]
 pub struct Ctx {
-    types: Map<Rc<str>, Scheme>,
+    pub(crate) types: Map<Rc<str>, Scheme<Type>>,
 
-    locals: Map<Rc<str>, Expr>,
+    locals: Map<Rc<str>, Local>,
 
     level: usize,
 
@@ -21,25 +21,31 @@ pub struct Ctx {
 
 #[derive(Debug)]
 enum UndoAction {
-    ReplaceLocal(Rc<str>, Expr, bool),
-    ReplaceType(Rc<str>, Scheme),
+    ReplaceLocal(Rc<str>, Local, bool),
+    ReplaceType(Rc<str>, Scheme<Type>),
     InsertLocal(Rc<str>, bool),
-    RemoveType(Rc<str>, Scheme),
+    RemoveType(Rc<str>, Scheme<Type>),
     InsertType(Rc<str>),
 }
 
+#[derive(Debug, Clone)]
+enum Local {
+    DeBrujinLvl(usize),
+    Expr(Rc<Expr>),
+}
+
 impl Ctx {
-    pub fn generalize(&self, ty: &Type) -> Scheme {
+    pub fn generalize(&self, ty: &Type) -> Scheme<Type> {
         let mut vars = ty.ftv();
 
         for name in &self.ftv() {
             vars.remove(name);
         }
 
-        Scheme(vars.into_iter().collect(), Box::new(ty.clone()))
+        Scheme(Some(vars.into_iter().collect()), ty.clone())
     }
 
-    pub fn insert_ty(&mut self, name: Rc<str>, scheme: Scheme) {
+    pub fn insert_ty(&mut self, name: Rc<str>, scheme: Scheme<Type>) {
         if let Some(scheme) = self.types.insert(name.clone(), scheme) {
             self.undo_stack.push(UndoAction::ReplaceType(name, scheme));
         } else {
@@ -47,15 +53,15 @@ impl Ctx {
         }
     }
 
-    pub fn push_local(&mut self, name: Rc<str>, ty: Box<Type>) {
+    pub fn push_local(&mut self, name: Rc<str>, ty: Type) {
         if let Some(expr) = self
             .locals
-            .insert(name.clone(), Expr::DeBrujinLvl(self.level))
+            .insert(name.clone(), Local::DeBrujinLvl(self.level))
         {
             self.undo_stack
                 .push(UndoAction::ReplaceLocal(name.clone(), expr, true));
 
-            if let Some(scheme) = self.types.insert(name.clone(), Scheme(vec![], ty)) {
+            if let Some(scheme) = self.types.insert(name.clone(), Scheme(None, ty)) {
                 self.undo_stack.push(UndoAction::ReplaceType(name, scheme));
             } else {
                 self.undo_stack.push(UndoAction::InsertType(name));
@@ -64,7 +70,7 @@ impl Ctx {
             self.undo_stack
                 .push(UndoAction::InsertLocal(name.clone(), true));
 
-            if let Some(scheme) = self.types.insert(name.clone(), Scheme(vec![], ty)) {
+            if let Some(scheme) = self.types.insert(name.clone(), Scheme(None, ty)) {
                 self.undo_stack.push(UndoAction::ReplaceType(name, scheme));
             } else {
                 self.undo_stack.push(UndoAction::InsertType(name));
@@ -74,8 +80,8 @@ impl Ctx {
         self.level += 1;
     }
 
-    pub fn push_let(&mut self, name: Rc<str>, expr: Expr, scheme: Scheme) {
-        if let Some(expr) = self.locals.insert(name.clone(), expr) {
+    pub fn push_let(&mut self, name: Rc<str>, expr: Rc<Expr>, scheme: Scheme<Type>) {
+        if let Some(expr) = self.locals.insert(name.clone(), Local::Expr(expr)) {
             self.undo_stack
                 .push(UndoAction::ReplaceLocal(name.clone(), expr, false));
 
@@ -134,10 +140,16 @@ impl Ctx {
         }
     }
 
-    pub fn get(&self, name: &Rc<str>) -> Option<(Option<&Expr>, &Scheme)> {
-        self.types
-            .get(name)
-            .map(|scheme| (self.locals.get(name), scheme))
+    pub fn get(&self, name: &Rc<str>, lvl: usize) -> Option<(Option<Rc<Expr>>, &Scheme<Type>)> {
+        self.types.get(name).map(|scheme| {
+            (
+                self.locals.get(name).map(|local| match local {
+                    Local::DeBrujinLvl(lvl_) => Rc::new(Expr::DeBrujinIdx(lvl - 1 - lvl_)),
+                    Local::Expr(expr) => expr.clone(),
+                }),
+                scheme,
+            )
+        })
     }
 
     pub fn save(&self) -> Savepoint {
@@ -151,7 +163,11 @@ impl Ctx {
 
 impl Types for Ctx {
     fn ftv(&self) -> Set<TypeVar> {
-        self.types.values().cloned().collect::<Vec<Scheme>>().ftv()
+        self.types
+            .values()
+            .cloned()
+            .collect::<Vec<Scheme<Type>>>()
+            .ftv()
     }
 
     fn apply(&mut self, s: &Subst) {

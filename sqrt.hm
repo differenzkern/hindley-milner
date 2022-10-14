@@ -1,0 +1,49 @@
+type Bool = True | False
+fun neg x = match x { | True → False | False → True } 
+
+neg True
+neg False
+
+type Nat = Z | S Nat
+
+fun lt x y = match x { | Z → match y { | Z → False | S x → True } | S x → match y { | Z → False | S y → lt x y } }
+
+fun null = Z
+fun eins = S null
+fun zwei = S eins
+fun drei = S zwei
+fun vier = S vier
+fun fuenf = S vier
+
+fun plus n m = match n { | Z → m | S n → S (plus n m) }
+plus null null
+plus eins null
+plus null eins
+plus eins eins
+plus null zwei
+plus zwei null
+plus null drei
+plus drei null
+plus eins zwei
+plus zwei eins
+
+fun mult x y = match x { | Z → Z | S x → (plus y (mult x y)) }
+mult null null
+mult eins null
+mult null eins
+mult eins zwei
+mult zwei eins
+mult zwei zwei
+
+fun dec x = match x { | Z → Z | S x →x }
+
+fun sq x = mult x x
+
+fun sqrt_helper x y = let if = (lt x (sq y)) in match if { | True → sqrt_helper x (dec y) | False → y }
+fun sqrt x = sqrt_helper x x
+
+sqrt (sq eins)
+sqrt (sq zwei)
+sqrt (sq drei)
+sqrt (sq vier)
+sqrt (sq fuenf)
