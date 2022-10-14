@@ -7,7 +7,7 @@ use super::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Scheme(pub Vec<TypeVar>, pub Box<Type>);
+pub struct Scheme<T: Types>(pub Option<Vec<TypeVar>>, pub T);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeVar(usize);
@@ -20,7 +20,6 @@ impl std::fmt::Display for TypeVar {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    Scheme(Scheme),
     Var(TypeVar),
     Lam(Box<Type>, Box<Type>),
     Adt(AdtRef),
@@ -34,7 +33,7 @@ impl std::fmt::Display for TypePrinter<'_> {
         let TypePrinter(env, ty) = self;
 
         match ty {
-            Type::Scheme(scheme) => {
+            /*Type::Scheme(scheme) => {
                 if !scheme.0.is_empty() {
                     write!(f, "!")?;
 
@@ -46,7 +45,7 @@ impl std::fmt::Display for TypePrinter<'_> {
                 }
 
                 TypePrinter(env, &scheme.1).fmt(f)
-            }
+            }*/
             Type::Var(TypeVar(var)) => write!(f, "'{var}"),
             Type::Lam(ty1, ty2) => write!(
                 f,
@@ -54,7 +53,7 @@ impl std::fmt::Display for TypePrinter<'_> {
                 TypePrinter(env, &*ty1),
                 TypePrinter(env, &*ty2)
             ),
-            Type::Adt(adt) => write!(f, "{}", env.get_adt(*adt).name),
+            Type::Adt(adt) => write!(f, "{}", env.get_adt(*adt).0),
             Type::Prim(_) => todo!(),
         }
     }
@@ -69,15 +68,18 @@ pub enum PrimType {
 pub struct Fresh(usize);
 
 impl Fresh {
-    pub fn instantiate(&mut self, scheme: &Scheme) -> Type {
+    pub fn instantiate(&mut self, scheme: &Scheme<Type>) -> Type {
         let mut map = Map::new();
 
-        for var in &scheme.0 {
-            let nvar = Type::Var(self.new_type_var());
-            map.insert(*var, nvar);
+        if let Some(vars) = &scheme.0 {
+            for var in vars {
+                let nvar = Type::Var(self.new_type_var());
+                map.insert(*var, nvar);
+            }
         }
+        
 
-        let mut t = *scheme.1.clone();
+        let mut t = scheme.1.clone();
 
         t.apply(&Subst(map));
 

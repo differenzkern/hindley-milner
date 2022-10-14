@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConsRef(pub AdtRef, pub usize);
 
 impl From<ConsRef> for AdtRef {
@@ -15,10 +15,10 @@ impl From<&ConsRef> for AdtRef {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunRef(pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AdtRef(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,18 +51,16 @@ impl<'a> std::fmt::Display for EnvError<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    /// lambda application
-    App(Box<Expr>, Box<Expr>),
-    /// application of constructor
-    ConsApp(ConsRef, Vec<Expr>),
+    App(Rc<Expr>, Rc<Expr>),
+    ConsApp(ConsRef, Vec<Rc<Expr>>),
     DeBrujinIdx(usize),
-    DeBrujinLvl(usize),
-    Lam(Box<Expr>),
-    Match(AdtRef, Box<Expr>, Vec<(usize, Expr)>),
+    Lam(Rc<Expr>),
+    Match(AdtRef, Rc<Expr>, Vec<(usize, Rc<Expr>)>),
     Fun(FunRef),
 }
 
 impl Expr {
+    /*
     pub fn convert_lvl_to_idx(&mut self, level: usize) {
         match self {
             Expr::App(e1, e2) => {
@@ -72,9 +70,9 @@ impl Expr {
             Expr::ConsApp(_, e2) => {
                 e2.iter_mut().for_each(|e| e.convert_lvl_to_idx(level));
             }
-            Expr::DeBrujinLvl(lvl) => {
+            /*Expr::DeBrujinLvl(lvl) => {
                 *self = Expr::DeBrujinIdx(level - 1 - *lvl);
-            }
+            }*/
             Expr::Lam(expr) => expr.convert_lvl_to_idx(level + 1),
             Expr::Match(_, e1, e2) => {
                 e1.convert_lvl_to_idx(level);
@@ -83,7 +81,8 @@ impl Expr {
             }
             _ => {}
         }
-    }
+    }*/
+    /*
 
     pub fn convert_idx_to_lvl(&mut self, level: usize, max_idx: usize) {
         match self {
@@ -110,7 +109,7 @@ impl Expr {
             }
             _ => {}
         }
-    }
+    }*/
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
